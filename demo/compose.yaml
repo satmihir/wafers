@@ -1,0 +1,17 @@
+services:
+  wafers-demo:
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+    environment:
+      XDG_STATE_HOME: /tmp/wafers-state
+      GOTOOLCHAIN: local
+    devices:
+      - /dev/fuse:/dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
