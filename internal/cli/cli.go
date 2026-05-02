@@ -21,6 +21,7 @@ const usage = `wafers creates cheap repo views backed by fuse-overlayfs.
 
 Usage:
   wafers add <name> --at <mountpoint> --branch <branch> [--from <repo>]
+  wafers git-commit <name> -m <message>
   wafers ls
   wafers rm <name> [--force]
   wafers doctor
@@ -34,6 +35,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	switch args[0] {
 	case "add":
 		return runAdd(ctx, args[1:], stdout)
+	case "git-commit":
+		return runGitCommit(ctx, args[1:], stdout)
 	case "ls":
 		return runList(args[1:], stdout)
 	case "rm":
@@ -171,6 +174,77 @@ func runList(args []string, stdout io.Writer) error {
 	return nil
 }
 
+func runGitCommit(ctx context.Context, args []string, stdout io.Writer) error {
+	parsed, err := parseGitCommitArgs(args)
+	if err != nil {
+		return err
+	}
+	if err := state.ValidateName(parsed.Name); err != nil {
+		return err
+	}
+
+	store, err := state.OpenDefault()
+	if err != nil {
+		return err
+	}
+	unlock, err := store.Lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	meta, err := store.Load(parsed.Name)
+	if err != nil {
+		return err
+	}
+	if !mount.IsMounted(meta.Mountpoint) {
+		return fmt.Errorf("wafer %q is not mounted at %s", meta.Name, meta.Mountpoint)
+	}
+
+	parent := meta.BaseCommit
+	if meta.LastCommit != "" {
+		parent = meta.LastCommit
+	}
+	if err := os.Remove(meta.Index); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("reset wafer index: %w", err)
+	}
+	if err := gitutil.ReadTree(ctx, meta.BaseGitDir, meta.Index, parent); err != nil {
+		return fmt.Errorf("seed wafer index: %w", err)
+	}
+	if err := gitutil.AddAll(ctx, meta.BaseGitDir, meta.Index, meta.Mountpoint); err != nil {
+		return fmt.Errorf("update wafer index: %w", err)
+	}
+	tree, err := gitutil.WriteTree(ctx, meta.BaseGitDir, meta.Index)
+	if err != nil {
+		return fmt.Errorf("write wafer tree: %w", err)
+	}
+	parentTree, err := gitutil.TreeForCommit(ctx, meta.BaseGitDir, parent)
+	if err != nil {
+		return fmt.Errorf("read parent tree: %w", err)
+	}
+	if tree == parentTree {
+		return errors.New("nothing to commit")
+	}
+	commit, err := gitutil.CommitTree(ctx, meta.BaseGitDir, tree, parent, parsed.Message)
+	if err != nil {
+		return fmt.Errorf("create commit: %w", err)
+	}
+	meta.LastCommit = commit
+	meta.UpdatedAt = time.Now()
+	if err := store.Save(meta); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "committed wafer %q as %s\n", meta.Name, shortSHA(commit))
+	return nil
+}
+
+func shortSHA(sha string) string {
+	if len(sha) > 12 {
+		return sha[:12]
+	}
+	return sha
+}
+
 func runRemove(ctx context.Context, args []string, stdout io.Writer) error {
 	parsed, err := parseRemoveArgs(args)
 	if err != nil {
@@ -294,6 +368,53 @@ func setAddFlag(parsed *addArgs, flag, value string) {
 type removeArgs struct {
 	Name  string
 	Force bool
+}
+
+type gitCommitArgs struct {
+	Name    string
+	Message string
+}
+
+func parseGitCommitArgs(args []string) (gitCommitArgs, error) {
+	var parsed gitCommitArgs
+	var positional []string
+	messageSet := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-m" || arg == "--message":
+			if messageSet {
+				return gitCommitArgs{}, errors.New("git-commit accepts exactly one -m/--message value")
+			}
+			if i+1 >= len(args) {
+				return gitCommitArgs{}, fmt.Errorf("%s requires a value", arg)
+			}
+			i++
+			parsed.Message = args[i]
+			messageSet = true
+		case strings.HasPrefix(arg, "-m="):
+			if messageSet {
+				return gitCommitArgs{}, errors.New("git-commit accepts exactly one -m/--message value")
+			}
+			parsed.Message = strings.TrimPrefix(arg, "-m=")
+			messageSet = true
+		case strings.HasPrefix(arg, "--message="):
+			if messageSet {
+				return gitCommitArgs{}, errors.New("git-commit accepts exactly one -m/--message value")
+			}
+			parsed.Message = strings.TrimPrefix(arg, "--message=")
+			messageSet = true
+		case strings.HasPrefix(arg, "-"):
+			return gitCommitArgs{}, fmt.Errorf("unknown git-commit flag %q", arg)
+		default:
+			positional = append(positional, arg)
+		}
+	}
+	if len(positional) != 1 || !messageSet {
+		return gitCommitArgs{}, errors.New("usage: wafers git-commit <name> -m <message>")
+	}
+	parsed.Name = positional[0]
+	return parsed, nil
 }
 
 func parseRemoveArgs(args []string) (removeArgs, error) {

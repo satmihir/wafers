@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/mihirsathe/wafers/internal/state"
 )
 
 func TestIntegrationAddListRemove(t *testing.T) {
@@ -27,7 +29,15 @@ func TestIntegrationAddListRemove(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", stateRoot)
 
 	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.name", "wafers")
+	runGit(t, repo, "config", "user.email", "wafers@example.invalid")
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "pkg", "value.txt"), []byte("base value\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, repo, "add", "README.md")
@@ -38,6 +48,9 @@ func TestIntegrationAddListRemove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("add failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
 	}
+	defer func() {
+		_ = Run(ctx, []string{"rm", "foo", "--force"}, &bytes.Buffer{}, &bytes.Buffer{})
+	}()
 	if _, err := os.Stat(filepath.Join(mountpoint, "README.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +59,77 @@ func TestIntegrationAddListRemove(t *testing.T) {
 	}
 	if gitInsideWorkTree(mountpoint) {
 		t.Fatal("mountpoint still appears to be inside a Git worktree")
+	}
+
+	baseIndexBefore, err := os.ReadFile(filepath.Join(repo, ".git", "index"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mountpoint, "pkg", "value.txt"), []byte("wafer value\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mountpoint, "new.txt"), []byte("new wafer file\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(mountpoint, "README.md")); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	err = Run(ctx, []string{"git-commit", "foo", "-m", "wafer changes"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := state.OpenDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.Load("foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.LastCommit == "" {
+		t.Fatal("last_commit was not set")
+	}
+	if parent := gitOutput(t, repo, "rev-parse", meta.LastCommit+"^"); parent != meta.BaseCommit {
+		t.Fatalf("parent = %s, want %s", parent, meta.BaseCommit)
+	}
+	if got := gitOutput(t, repo, "show", meta.LastCommit+":pkg/value.txt"); got != "wafer value" {
+		t.Fatalf("committed pkg/value.txt = %q", got)
+	}
+	if got := gitOutput(t, repo, "show", meta.LastCommit+":new.txt"); got != "new wafer file" {
+		t.Fatalf("committed new.txt = %q", got)
+	}
+	if gitPathExists(repo, meta.LastCommit, "README.md") {
+		t.Fatal("README.md should be deleted in committed tree")
+	}
+	baseIndexAfter, err := os.ReadFile(filepath.Join(repo, ".git", "index"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(baseIndexBefore, baseIndexAfter) {
+		t.Fatal("base repo index changed during wafers git-commit")
+	}
+
+	if err := os.WriteFile(filepath.Join(mountpoint, "second.txt"), []byte("second\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	firstCommit := meta.LastCommit
+	stdout.Reset()
+	err = Run(ctx, []string{"git-commit", "foo", "--message", "second wafer change"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err = store.Load("foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parent := gitOutput(t, repo, "rev-parse", meta.LastCommit+"^"); parent != firstCommit {
+		t.Fatalf("second parent = %s, want %s", parent, firstCommit)
+	}
+
+	err = Run(ctx, []string{"git-commit", "foo", "-m", "empty"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "nothing to commit") {
+		t.Fatalf("empty commit err = %v, want nothing to commit", err)
 	}
 
 	stdout.Reset()
@@ -80,6 +164,23 @@ func runGit(t *testing.T, dir string, args ...string) {
 	if err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
 	}
+}
+
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func gitPathExists(dir, commit, path string) bool {
+	cmd := exec.Command("git", "cat-file", "-e", commit+":"+path)
+	cmd.Dir = dir
+	return cmd.Run() == nil
 }
 
 func gitInsideWorkTree(dir string) bool {

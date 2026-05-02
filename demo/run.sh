@@ -62,13 +62,34 @@ EOF
 cat >"$VIEW/new.txt" <<'EOF'
 new wafer file
 EOF
+rm "$VIEW/README.md"
 
 grep -q 'base value' "$BASE/pkg/value.txt" || fail "wafer edit mutated base file"
 test ! -e "$BASE/new.txt" || fail "wafer-created file appeared in base"
 log "wafer edit isolated from base"
 
+"$BIN" git-commit demo -m "wafer changes"
+COMMIT=$(sed -n 's/.*"last_commit": "\([^"]*\)".*/\1/p' "$XDG_STATE_HOME/wafers/wafers/demo/meta.json")
+test -n "$COMMIT" || fail "last_commit missing after git-commit"
+git -C "$BASE" cat-file -e "$COMMIT^{commit}" || fail "commit object missing"
+test "$(git -C "$BASE" show "$COMMIT:pkg/value.txt")" = "wafer value" || fail "modified file missing from commit"
+test "$(git -C "$BASE" show "$COMMIT:new.txt")" = "new wafer file" || fail "new file missing from commit"
+if git -C "$BASE" cat-file -e "$COMMIT:README.md" 2>/dev/null; then
+  fail "deleted file still exists in commit"
+fi
+log "git-commit created commit"
+
+if "$BIN" git-commit demo -m "empty" >/tmp/wafers-empty-commit.log 2>&1; then
+  fail "empty git-commit succeeded"
+fi
+grep -q 'nothing to commit' /tmp/wafers-empty-commit.log || {
+  cat /tmp/wafers-empty-commit.log >&2
+  fail "empty git-commit failure did not explain no changes"
+}
+log "git-commit refused empty commit"
+
 if "$BIN" rm demo >/tmp/wafers-rm.log 2>&1; then
-  fail "rm succeeded despite wafer changes"
+ fail "rm succeeded despite wafer changes"
 fi
 grep -q 'has changes' /tmp/wafers-rm.log || {
   cat /tmp/wafers-rm.log >&2

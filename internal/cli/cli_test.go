@@ -31,3 +31,36 @@ func TestParseRemoveArgsSupportsForceAfterName(t *testing.T) {
 		t.Fatalf("unexpected args: %#v", got)
 	}
 }
+
+func TestParseGitCommitArgs(t *testing.T) {
+	got, err := parseGitCommitArgs([]string{"demo", "-m", "message"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "demo" || got.Message != "message" {
+		t.Fatalf("unexpected args: %#v", got)
+	}
+
+	got, err = parseGitCommitArgs([]string{"demo", "--message=other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "demo" || got.Message != "other" {
+		t.Fatalf("unexpected args: %#v", got)
+	}
+}
+
+func TestParseGitCommitArgsRejectsInvalidForms(t *testing.T) {
+	tests := [][]string{
+		{"demo"},
+		{"-m", "message"},
+		{"demo", "-m"},
+		{"demo", "-m", "one", "--message", "two"},
+		{"demo", "--author", "me", "-m", "message"},
+	}
+	for _, args := range tests {
+		if _, err := parseGitCommitArgs(args); err == nil {
+			t.Fatalf("parseGitCommitArgs(%v) returned nil", args)
+		}
+	}
+}

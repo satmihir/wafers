@@ -18,10 +18,11 @@ This is early and intentionally small. The current version can:
 - create a named wafer mounted at a chosen path
 - hide `.git` inside the wafer view
 - list known wafers
+- create Git commit objects from the full wafer view
 - remove wafers, with `--force` required when the wafer has changes
 
-It does not yet create commits or update branches. `commit` and `push-local`
-are the next planned pieces.
+It does not yet update branches. `git-push-local` is the next planned Git
+operation.
 
 ## Requirements
 
@@ -60,6 +61,15 @@ git -C /tmp/my-demo status
 The Git command should fail because the wafer view is deliberately not exposed
 as a Git working tree.
 
+After editing files, create a commit object through `wafers`:
+
+```sh
+wafers git-commit my-demo -m "my wafer changes"
+```
+
+This commits the whole wafer view using a private index. It stores the commit
+SHA in wafer metadata but does not update a branch yet.
+
 When done:
 
 ```sh
@@ -80,6 +90,7 @@ currently inside the wafer mountpoint.
 
 ```text
 wafers add <name> --at <mountpoint> --branch <branch> [--from <repo>]
+wafers git-commit <name> -m <message>
 wafers ls
 wafers rm <name> [--force]
 wafers doctor
@@ -91,6 +102,11 @@ root, Git dir, and current `HEAD`, then mounts the wafer at `--at`.
 `wafers` hides `.git` inside the mounted view by creating a wafer-local
 whiteout. This discourages running Git commands inside wafer views and keeps
 Git metadata ownership with the base repo and future `wafers` commands.
+
+`wafers git-commit` commits the entire mounted wafer view, similar to
+`git add -A && git commit`. It writes Git objects into the base repository's
+object database using a wafer-private index, then records the new commit as
+`last_commit` in wafer metadata. It does not update refs or branches.
 
 ## Docker Demo
 
@@ -119,8 +135,8 @@ See `demo/README.md` for the full demo flow and Docker fallback command.
 
 - State is stored under `$XDG_STATE_HOME/wafers`, or
   `~/.local/state/wafers` when `XDG_STATE_HOME` is unset.
-- The base repo working tree and index are not modified by wafer lifecycle
-  commands.
+- The base repo working tree and index are not modified by wafer lifecycle or
+  `git-commit` commands.
 - `.git` is hidden by deleting it from the mounted overlay, which creates
   wafer-local overlay whiteout state.
 - Mountpoints should be outside other Git repos so Git cannot discover a

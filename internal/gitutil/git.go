@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -49,9 +50,62 @@ func IsInsideWorkTree(ctx context.Context, dir string) bool {
 	return err == nil && out == "true"
 }
 
+func ReadTree(ctx context.Context, gitDir, indexPath, treeish string) error {
+	_, err := gitWithIndex(ctx, "", gitDir, indexPath, "read-tree", treeish)
+	return err
+}
+
+func AddAll(ctx context.Context, gitDir, indexPath, workTree string) error {
+	_, err := gitWithIndex(ctx, workTree, gitDir, indexPath, "--work-tree", workTree, "add", "-A", "--", ".")
+	return err
+}
+
+func WriteTree(ctx context.Context, gitDir, indexPath string) (string, error) {
+	return gitWithIndex(ctx, "", gitDir, indexPath, "write-tree")
+}
+
+func TreeForCommit(ctx context.Context, gitDir, commit string) (string, error) {
+	return gitWithDir(ctx, "", gitDir, "rev-parse", commit+"^{tree}")
+}
+
+func CommitTree(ctx context.Context, gitDir, tree, parent, message string) (string, error) {
+	return gitWithDir(ctx, "", gitDir, "commit-tree", tree, "-p", parent, "-m", message)
+}
+
+func CommitParent(ctx context.Context, gitDir, commit string) (string, error) {
+	return gitWithDir(ctx, "", gitDir, "rev-parse", commit+"^")
+}
+
+func ShowFile(ctx context.Context, gitDir, commit, path string) (string, error) {
+	return gitWithDir(ctx, "", gitDir, "show", commit+":"+path)
+}
+
+func PathExistsInCommit(ctx context.Context, gitDir, commit, path string) bool {
+	_, err := gitWithDir(ctx, "", gitDir, "cat-file", "-e", commit+":"+path)
+	return err == nil
+}
+
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
+	return runGit(ctx, dir, nil, args...)
+}
+
+func gitWithDir(ctx context.Context, dir, gitDir string, args ...string) (string, error) {
+	fullArgs := append([]string{"--git-dir", gitDir}, args...)
+	return runGit(ctx, dir, nil, fullArgs...)
+}
+
+func gitWithIndex(ctx context.Context, dir, gitDir, indexPath string, args ...string) (string, error) {
+	fullArgs := append([]string{"--git-dir", gitDir}, args...)
+	env := append(os.Environ(), "GIT_INDEX_FILE="+indexPath)
+	return runGit(ctx, dir, env, fullArgs...)
+}
+
+func runGit(ctx context.Context, dir string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	if env != nil {
+		cmd.Env = env
+	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
