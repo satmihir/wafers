@@ -40,7 +40,7 @@ func TestIntegrationAddListRemove(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "pkg", "value.txt"), []byte("base value\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "add", ".")
 	runGit(t, repo, "-c", "user.name=wafers", "-c", "user.email=wafers@example.invalid", "commit", "-m", "initial")
 
 	var stdout, stderr bytes.Buffer
@@ -48,9 +48,30 @@ func TestIntegrationAddListRemove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("add failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
 	}
+	if !strings.Contains(stdout.String(), "agent/foo") {
+		t.Fatalf("add output did not mention branch: %s", stdout.String())
+	}
 	defer func() {
 		_ = Run(ctx, []string{"rm", "foo", "--force"}, &bytes.Buffer{}, &bytes.Buffer{})
 	}()
+	store, err := state.OpenDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err := store.Load("foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.LastCommit != meta.BaseCommit {
+		t.Fatalf("last_commit after add = %s, want base %s", meta.LastCommit, meta.BaseCommit)
+	}
+	if branchTip := gitOutput(t, repo, "rev-parse", "refs/heads/agent/foo"); branchTip != meta.BaseCommit {
+		t.Fatalf("branch tip after add = %s, want base %s", branchTip, meta.BaseCommit)
+	}
+	err = Run(ctx, []string{"add", "bar", "--from", repo, "--at", filepath.Join(root, "mnt2"), "--branch", "agent/foo"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("duplicate branch add err = %v, want already exists", err)
+	}
 	if _, err := os.Stat(filepath.Join(mountpoint, "README.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -79,11 +100,7 @@ func TestIntegrationAddListRemove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := state.OpenDefault()
-	if err != nil {
-		t.Fatal(err)
-	}
-	meta, err := store.Load("foo")
+	meta, err = store.Load("foo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,6 +109,9 @@ func TestIntegrationAddListRemove(t *testing.T) {
 	}
 	if parent := gitOutput(t, repo, "rev-parse", meta.LastCommit+"^"); parent != meta.BaseCommit {
 		t.Fatalf("parent = %s, want %s", parent, meta.BaseCommit)
+	}
+	if branchTip := gitOutput(t, repo, "rev-parse", "refs/heads/agent/foo"); branchTip != meta.LastCommit {
+		t.Fatalf("branch tip after commit = %s, want %s", branchTip, meta.LastCommit)
 	}
 	if got := gitOutput(t, repo, "show", meta.LastCommit+":pkg/value.txt"); got != "wafer value" {
 		t.Fatalf("committed pkg/value.txt = %q", got)
@@ -126,11 +146,24 @@ func TestIntegrationAddListRemove(t *testing.T) {
 	if parent := gitOutput(t, repo, "rev-parse", meta.LastCommit+"^"); parent != firstCommit {
 		t.Fatalf("second parent = %s, want %s", parent, firstCommit)
 	}
+	if branchTip := gitOutput(t, repo, "rev-parse", "refs/heads/agent/foo"); branchTip != meta.LastCommit {
+		t.Fatalf("branch tip after second commit = %s, want %s", branchTip, meta.LastCommit)
+	}
 
 	err = Run(ctx, []string{"git-commit", "foo", "-m", "empty"}, &stdout, &stderr)
 	if err == nil || !strings.Contains(err.Error(), "nothing to commit") {
 		t.Fatalf("empty commit err = %v, want nothing to commit", err)
 	}
+
+	runGit(t, repo, "update-ref", "refs/heads/agent/foo", meta.BaseCommit)
+	if err := os.WriteFile(filepath.Join(mountpoint, "moved.txt"), []byte("moved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = Run(ctx, []string{"git-commit", "foo", "-m", "should fail"}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "moved outside wafers") {
+		t.Fatalf("moved branch commit err = %v, want moved outside wafers", err)
+	}
+	runGit(t, repo, "update-ref", "refs/heads/agent/foo", meta.LastCommit)
 
 	stdout.Reset()
 	err = Run(ctx, []string{"ls"}, &stdout, &stderr)
@@ -148,6 +181,9 @@ func TestIntegrationAddListRemove(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(stateRoot, "wafers", "foo")); !os.IsNotExist(err) {
 		t.Fatalf("wafer state should be removed, stat err = %v", err)
+	}
+	if branchTip := gitOutput(t, repo, "rev-parse", "refs/heads/agent/foo"); branchTip != meta.LastCommit {
+		t.Fatalf("branch should remain after rm, tip = %s, want %s", branchTip, meta.LastCommit)
 	}
 }
 

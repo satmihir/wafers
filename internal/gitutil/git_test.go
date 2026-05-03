@@ -20,3 +20,11 @@ func TestValidateBranch(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalBranchRef(t *testing.T) {
+	got := LocalBranchRef("agent/foo")
+	want := "refs/heads/agent/foo"
+	if got != want {
+		t.Fatalf("LocalBranchRef() = %q, want %q", got, want)
+	}
+}

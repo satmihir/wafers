@@ -1,14 +1,16 @@
 # wafers Docker Demo
 
 This demo runs `wafers` inside a Linux container with `fuse-overlayfs` installed.
-It exercises `doctor`, `add`, `ls`, and `rm`, then runs the gated integration
-test.
+It exercises `doctor`, `add`, `git-commit`, `ls`, and `rm`, then runs the gated
+integration test.
 
 Run from the repo root:
 
 ```sh
 docker compose -f demo/compose.yaml up --build --abort-on-container-exit
 ```
+
+For a hand-driven walkthrough, see `demo/MANUAL_TEST.md`.
 
 FUSE inside Docker requires the host Docker engine to expose `/dev/fuse`. The
 Compose file uses a narrow setup:

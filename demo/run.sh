@@ -39,6 +39,10 @@ git -C "$BASE" commit -m initial
 
 "$BIN" add demo --from "$BASE" --at "$VIEW" --branch agent/demo
 log "wafer created"
+BASE_COMMIT=$(git -C "$BASE" rev-parse HEAD)
+test "$(git -C "$BASE" rev-parse refs/heads/agent/demo)" = "$BASE_COMMIT" || fail "wafer branch not created at base commit"
+test "$(sed -n 's/.*"last_commit": "\([^"]*\)".*/\1/p' "$XDG_STATE_HOME/wafers/wafers/demo/meta.json")" = "$BASE_COMMIT" || fail "last_commit not initialized to base commit"
+log "branch created"
 
 "$BIN" ls
 
@@ -72,6 +76,7 @@ log "wafer edit isolated from base"
 COMMIT=$(sed -n 's/.*"last_commit": "\([^"]*\)".*/\1/p' "$XDG_STATE_HOME/wafers/wafers/demo/meta.json")
 test -n "$COMMIT" || fail "last_commit missing after git-commit"
 git -C "$BASE" cat-file -e "$COMMIT^{commit}" || fail "commit object missing"
+test "$(git -C "$BASE" rev-parse refs/heads/agent/demo)" = "$COMMIT" || fail "wafer branch did not advance"
 test "$(git -C "$BASE" show "$COMMIT:pkg/value.txt")" = "wafer value" || fail "modified file missing from commit"
 test "$(git -C "$BASE" show "$COMMIT:new.txt")" = "new wafer file" || fail "new file missing from commit"
 if git -C "$BASE" cat-file -e "$COMMIT:README.md" 2>/dev/null; then
@@ -98,9 +103,10 @@ grep -q 'has changes' /tmp/wafers-rm.log || {
 log "rm refused dirty wafer"
 
 "$BIN" rm demo --force
-if test -e "$XDG_STATE_HOME/wafers/demo"; then
+if test -e "$XDG_STATE_HOME/wafers/wafers/demo"; then
   fail "wafer state still exists after rm --force"
 fi
+test "$(git -C "$BASE" rev-parse refs/heads/agent/demo)" = "$COMMIT" || fail "wafer branch removed or changed after rm"
 log "rm --force removed wafer"
 
 WAFERS_INTEGRATION=1 go test ./internal/cli -run TestIntegrationAddListRemove -count=1

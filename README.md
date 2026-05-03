@@ -16,13 +16,13 @@ This is early and intentionally small. The current version can:
 
 - check whether the host can run `fuse-overlayfs`
 - create a named wafer mounted at a chosen path
+- create a local branch for each wafer
 - hide `.git` inside the wafer view
 - list known wafers
-- create Git commit objects from the full wafer view
+- commit the full wafer view onto the wafer branch
 - remove wafers, with `--force` required when the wafer has changes
 
-It does not yet update branches. `git-push-local` is the next planned Git
-operation.
+It does not yet push branches to remotes.
 
 ## Requirements
 
@@ -68,7 +68,7 @@ wafers git-commit my-demo -m "my wafer changes"
 ```
 
 This commits the whole wafer view using a private index. It stores the commit
-SHA in wafer metadata but does not update a branch yet.
+SHA in wafer metadata and advances the local wafer branch.
 
 When done:
 
@@ -97,7 +97,8 @@ wafers doctor
 ```
 
 `--from` defaults to the current directory. `wafers add` records the base repo
-root, Git dir, and current `HEAD`, then mounts the wafer at `--at`.
+root, Git dir, and current `HEAD`, creates the requested local branch at that
+commit, then mounts the wafer at `--at`. The branch must not already exist.
 
 `wafers` hides `.git` inside the mounted view by creating a wafer-local
 whiteout. This discourages running Git commands inside wafer views and keeps
@@ -106,7 +107,8 @@ Git metadata ownership with the base repo and future `wafers` commands.
 `wafers git-commit` commits the entire mounted wafer view, similar to
 `git add -A && git commit`. It writes Git objects into the base repository's
 object database using a wafer-private index, then records the new commit as
-`last_commit` in wafer metadata. It does not update refs or branches.
+`last_commit` in wafer metadata and atomically advances the wafer branch. If
+the branch moved outside `wafers`, the command refuses to overwrite it.
 
 ## Docker Demo
 
@@ -137,6 +139,7 @@ See `demo/README.md` for the full demo flow and Docker fallback command.
   `~/.local/state/wafers` when `XDG_STATE_HOME` is unset.
 - The base repo working tree and index are not modified by wafer lifecycle or
   `git-commit` commands.
+- `wafers rm` removes wafer mount/state but keeps the local branch and commits.
 - `.git` is hidden by deleting it from the mounted overlay, which creates
   wafer-local overlay whiteout state.
 - Mountpoints should be outside other Git repos so Git cannot discover a

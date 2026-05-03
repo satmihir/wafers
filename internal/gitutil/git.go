@@ -72,6 +72,34 @@ func CommitTree(ctx context.Context, gitDir, tree, parent, message string) (stri
 	return gitWithDir(ctx, "", gitDir, "commit-tree", tree, "-p", parent, "-m", message)
 }
 
+func LocalBranchRef(branch string) string {
+	return "refs/heads/" + branch
+}
+
+func LocalBranchExists(ctx context.Context, gitDir, branch string) bool {
+	_, err := gitWithDir(ctx, "", gitDir, "show-ref", "--verify", "--quiet", LocalBranchRef(branch))
+	return err == nil
+}
+
+func CreateLocalBranch(ctx context.Context, gitDir, branch, commit string) error {
+	_, err := gitWithDir(ctx, "", gitDir, "update-ref", LocalBranchRef(branch), commit, "")
+	return err
+}
+
+func DeleteLocalBranch(ctx context.Context, gitDir, branch string) error {
+	_, err := gitWithDir(ctx, "", gitDir, "update-ref", "-d", LocalBranchRef(branch))
+	return err
+}
+
+func LocalBranchTip(ctx context.Context, gitDir, branch string) (string, error) {
+	return gitWithDir(ctx, "", gitDir, "rev-parse", "--verify", LocalBranchRef(branch))
+}
+
+func UpdateLocalBranch(ctx context.Context, gitDir, branch, newCommit, oldCommit string) error {
+	_, err := gitWithDir(ctx, "", gitDir, "update-ref", LocalBranchRef(branch), newCommit, oldCommit)
+	return err
+}
+
 func CommitParent(ctx context.Context, gitDir, commit string) (string, error) {
 	return gitWithDir(ctx, "", gitDir, "rev-parse", commit+"^")
 }

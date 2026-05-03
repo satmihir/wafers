@@ -91,6 +91,9 @@ func runAdd(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if gitutil.LocalBranchExists(ctx, repo.GitDir, parsed.Branch) {
+		return fmt.Errorf("branch %q already exists", parsed.Branch)
+	}
 	mountpoint, err := filepath.Abs(parsed.At)
 	if err != nil {
 		return err
@@ -111,6 +114,7 @@ func runAdd(ctx context.Context, args []string, stdout io.Writer) error {
 		Upperdir:   filepath.Join(waferDir, "upper"),
 		Workdir:    filepath.Join(waferDir, "work"),
 		Index:      filepath.Join(waferDir, "index"),
+		LastCommit: repo.Head,
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
@@ -118,8 +122,12 @@ func runAdd(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	cleanup := true
+	branchCreated := false
 	defer func() {
 		if cleanup {
+			if branchCreated {
+				_ = gitutil.DeleteLocalBranch(ctx, repo.GitDir, parsed.Branch)
+			}
 			_ = mount.Unmount(ctx, mountpoint)
 			_ = os.RemoveAll(waferDir)
 		}
@@ -134,11 +142,15 @@ func runAdd(ctx context.Context, args []string, stdout io.Writer) error {
 	if gitutil.IsInsideWorkTree(ctx, mountpoint) {
 		return errors.New("wafer mount still appears to be inside a Git worktree; choose a mountpoint outside any Git repository")
 	}
+	if err := gitutil.CreateLocalBranch(ctx, repo.GitDir, parsed.Branch, repo.Head); err != nil {
+		return fmt.Errorf("create branch %q: %w", parsed.Branch, err)
+	}
+	branchCreated = true
 	if err := store.Save(&meta); err != nil {
 		return err
 	}
 	cleanup = false
-	fmt.Fprintf(stdout, "created wafer %q at %s\n", name, mountpoint)
+	fmt.Fprintf(stdout, "created wafer %q at %s on branch %s\n", name, mountpoint, parsed.Branch)
 	return nil
 }
 
@@ -201,9 +213,16 @@ func runGitCommit(ctx context.Context, args []string, stdout io.Writer) error {
 		return fmt.Errorf("wafer %q is not mounted at %s", meta.Name, meta.Mountpoint)
 	}
 
-	parent := meta.BaseCommit
-	if meta.LastCommit != "" {
-		parent = meta.LastCommit
+	parent, err := gitutil.LocalBranchTip(ctx, meta.BaseGitDir, meta.Branch)
+	if err != nil {
+		return fmt.Errorf("read branch %q: %w", meta.Branch, err)
+	}
+	expected := meta.LastCommit
+	if expected == "" {
+		expected = meta.BaseCommit
+	}
+	if parent != expected {
+		return fmt.Errorf("branch %q moved outside wafers; expected %s, found %s", meta.Branch, shortSHA(expected), shortSHA(parent))
 	}
 	if err := os.Remove(meta.Index); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("reset wafer index: %w", err)
@@ -228,6 +247,9 @@ func runGitCommit(ctx context.Context, args []string, stdout io.Writer) error {
 	commit, err := gitutil.CommitTree(ctx, meta.BaseGitDir, tree, parent, parsed.Message)
 	if err != nil {
 		return fmt.Errorf("create commit: %w", err)
+	}
+	if err := gitutil.UpdateLocalBranch(ctx, meta.BaseGitDir, meta.Branch, commit, parent); err != nil {
+		return fmt.Errorf("update branch %q: %w", meta.Branch, err)
 	}
 	meta.LastCommit = commit
 	meta.UpdatedAt = time.Now()
