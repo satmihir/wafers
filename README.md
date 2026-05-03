@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" alt="wafers logo" width="140">
+  <img src="logo.png" alt="wafers logo" width="250">
 </p>
 
 # wafers
