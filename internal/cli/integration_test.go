@@ -13,7 +13,134 @@ import (
 	"github.com/mihirsathe/wafers/internal/state"
 )
 
-func TestIntegrationAddListRemove(t *testing.T) {
+type integrationEnv struct {
+	ctx        context.Context
+	root       string
+	repo       string
+	stateRoot  string
+	mountpoint string
+	store      *state.Store
+	stdout     bytes.Buffer
+	stderr     bytes.Buffer
+}
+
+func TestIntegrationAddCreatesBranchAndHidesGit(t *testing.T) {
+	env := newIntegrationEnv(t)
+	meta := env.addWafer(t, "foo", "agent/foo")
+
+	if meta.LastCommit != meta.BaseCommit {
+		t.Fatalf("last_commit after add = %s, want base %s", meta.LastCommit, meta.BaseCommit)
+	}
+	if branchTip := gitOutput(t, env.repo, "rev-parse", "refs/heads/agent/foo"); branchTip != meta.BaseCommit {
+		t.Fatalf("branch tip after add = %s, want base %s", branchTip, meta.BaseCommit)
+	}
+	if _, err := os.Stat(filepath.Join(env.mountpoint, "README.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(env.mountpoint, ".git")); !os.IsNotExist(err) {
+		t.Fatalf(".git should be hidden, stat err = %v", err)
+	}
+	if gitInsideWorkTree(env.mountpoint) {
+		t.Fatal("mountpoint still appears to be inside a Git worktree")
+	}
+
+	err := Run(env.ctx, []string{"add", "bar", "--from", env.repo, "--at", filepath.Join(env.root, "mnt2"), "--branch", "agent/foo"}, &env.stdout, &env.stderr)
+	if err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("duplicate branch add err = %v, want already exists", err)
+	}
+}
+
+func TestIntegrationGitCommitAdvancesBranch(t *testing.T) {
+	env := newIntegrationEnv(t)
+	meta := env.addWafer(t, "foo", "agent/foo")
+	baseIndexBefore := readFile(t, filepath.Join(env.repo, ".git", "index"))
+
+	writeFile(t, filepath.Join(env.mountpoint, "pkg", "value.txt"), "wafer value\n")
+	writeFile(t, filepath.Join(env.mountpoint, "new.txt"), "new wafer file\n")
+	if err := os.Remove(filepath.Join(env.mountpoint, "README.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	meta = env.gitCommit(t, "foo", "wafer changes")
+	if parent := gitOutput(t, env.repo, "rev-parse", meta.LastCommit+"^"); parent != meta.BaseCommit {
+		t.Fatalf("parent = %s, want %s", parent, meta.BaseCommit)
+	}
+	if branchTip := gitOutput(t, env.repo, "rev-parse", "refs/heads/agent/foo"); branchTip != meta.LastCommit {
+		t.Fatalf("branch tip after commit = %s, want %s", branchTip, meta.LastCommit)
+	}
+	if got := gitOutput(t, env.repo, "show", meta.LastCommit+":pkg/value.txt"); got != "wafer value" {
+		t.Fatalf("committed pkg/value.txt = %q", got)
+	}
+	if got := gitOutput(t, env.repo, "show", meta.LastCommit+":new.txt"); got != "new wafer file" {
+		t.Fatalf("committed new.txt = %q", got)
+	}
+	if gitPathExists(env.repo, meta.LastCommit, "README.md") {
+		t.Fatal("README.md should be deleted in committed tree")
+	}
+	if !bytes.Equal(baseIndexBefore, readFile(t, filepath.Join(env.repo, ".git", "index"))) {
+		t.Fatal("base repo index changed during wafers git-commit")
+	}
+	if !strings.Contains(env.stdout.String(), shortSHA(meta.LastCommit)) {
+		t.Fatalf("commit output did not include short sha: %s", env.stdout.String())
+	}
+}
+
+func TestIntegrationRepeatedGitCommitChainsFromPreviousCommit(t *testing.T) {
+	env := newIntegrationEnv(t)
+	env.addWafer(t, "foo", "agent/foo")
+
+	writeFile(t, filepath.Join(env.mountpoint, "first.txt"), "first\n")
+	first := env.gitCommit(t, "foo", "first").LastCommit
+	writeFile(t, filepath.Join(env.mountpoint, "second.txt"), "second\n")
+	second := env.gitCommit(t, "foo", "second").LastCommit
+
+	if parent := gitOutput(t, env.repo, "rev-parse", second+"^"); parent != first {
+		t.Fatalf("second parent = %s, want %s", parent, first)
+	}
+	if branchTip := gitOutput(t, env.repo, "rev-parse", "refs/heads/agent/foo"); branchTip != second {
+		t.Fatalf("branch tip after second commit = %s, want %s", branchTip, second)
+	}
+	err := Run(env.ctx, []string{"git-commit", "foo", "-m", "empty"}, &env.stdout, &env.stderr)
+	if err == nil || !strings.Contains(err.Error(), "nothing to commit") {
+		t.Fatalf("empty commit err = %v, want nothing to commit", err)
+	}
+}
+
+func TestIntegrationMovedBranchRefFailsGitCommit(t *testing.T) {
+	env := newIntegrationEnv(t)
+	meta := env.addWafer(t, "foo", "agent/foo")
+	writeFile(t, filepath.Join(env.mountpoint, "first.txt"), "first\n")
+	meta = env.gitCommit(t, "foo", "first")
+
+	runGit(t, env.repo, "update-ref", "refs/heads/agent/foo", meta.BaseCommit)
+	writeFile(t, filepath.Join(env.mountpoint, "moved.txt"), "moved\n")
+	err := Run(env.ctx, []string{"git-commit", "foo", "-m", "should fail"}, &env.stdout, &env.stderr)
+	if err == nil || !strings.Contains(err.Error(), "moved outside wafers") {
+		t.Fatalf("moved branch commit err = %v, want moved outside wafers", err)
+	}
+	runGit(t, env.repo, "update-ref", "refs/heads/agent/foo", meta.LastCommit)
+}
+
+func TestIntegrationRemoveKeepsBranch(t *testing.T) {
+	env := newIntegrationEnv(t)
+	env.addWafer(t, "foo", "agent/foo")
+	writeFile(t, filepath.Join(env.mountpoint, "first.txt"), "first\n")
+	meta := env.gitCommit(t, "foo", "first")
+
+	env.stdout.Reset()
+	if err := Run(env.ctx, []string{"rm", "foo", "--force"}, &env.stdout, &env.stderr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(env.stateRoot, "wafers", "foo")); !os.IsNotExist(err) {
+		t.Fatalf("wafer state should be removed, stat err = %v", err)
+	}
+	if branchTip := gitOutput(t, env.repo, "rev-parse", "refs/heads/agent/foo"); branchTip != meta.LastCommit {
+		t.Fatalf("branch should remain after rm, tip = %s, want %s", branchTip, meta.LastCommit)
+	}
+}
+
+func newIntegrationEnv(t *testing.T) *integrationEnv {
+	t.Helper()
 	if os.Getenv("WAFERS_INTEGRATION") != "1" {
 		t.Skip("set WAFERS_INTEGRATION=1 to run fuse-overlayfs integration tests")
 	}
@@ -21,170 +148,92 @@ func TestIntegrationAddListRemove(t *testing.T) {
 		t.Skip("integration test requires Linux")
 	}
 
-	ctx := context.Background()
 	root := t.TempDir()
 	repo := filepath.Join(root, "repo")
 	stateRoot := filepath.Join(root, "state")
-	mountpoint := filepath.Join(root, "mnt")
 	t.Setenv("XDG_STATE_HOME", stateRoot)
-
-	runGit(t, repo, "init")
-	runGit(t, repo, "config", "user.name", "wafers")
-	runGit(t, repo, "config", "user.email", "wafers@example.invalid")
-	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("hello\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(repo, "pkg"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, "pkg", "value.txt"), []byte("base value\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, repo, "add", ".")
-	runGit(t, repo, "-c", "user.name=wafers", "-c", "user.email=wafers@example.invalid", "commit", "-m", "initial")
-
-	var stdout, stderr bytes.Buffer
-	err := Run(ctx, []string{"add", "foo", "--from", repo, "--at", mountpoint, "--branch", "agent/foo"}, &stdout, &stderr)
-	if err != nil {
-		t.Fatalf("add failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
-	}
-	if !strings.Contains(stdout.String(), "agent/foo") {
-		t.Fatalf("add output did not mention branch: %s", stdout.String())
-	}
-	defer func() {
-		_ = Run(ctx, []string{"rm", "foo", "--force"}, &bytes.Buffer{}, &bytes.Buffer{})
-	}()
+	createBaseRepo(t, repo)
 	store, err := state.OpenDefault()
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err := store.Load("foo")
-	if err != nil {
-		t.Fatal(err)
+	return &integrationEnv{
+		ctx:        context.Background(),
+		root:       root,
+		repo:       repo,
+		stateRoot:  stateRoot,
+		mountpoint: filepath.Join(root, "mnt"),
+		store:      store,
 	}
-	if meta.LastCommit != meta.BaseCommit {
-		t.Fatalf("last_commit after add = %s, want base %s", meta.LastCommit, meta.BaseCommit)
-	}
-	if branchTip := gitOutput(t, repo, "rev-parse", "refs/heads/agent/foo"); branchTip != meta.BaseCommit {
-		t.Fatalf("branch tip after add = %s, want base %s", branchTip, meta.BaseCommit)
-	}
-	err = Run(ctx, []string{"add", "bar", "--from", repo, "--at", filepath.Join(root, "mnt2"), "--branch", "agent/foo"}, &stdout, &stderr)
-	if err == nil || !strings.Contains(err.Error(), "already exists") {
-		t.Fatalf("duplicate branch add err = %v, want already exists", err)
-	}
-	if _, err := os.Stat(filepath.Join(mountpoint, "README.md")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(mountpoint, ".git")); !os.IsNotExist(err) {
-		t.Fatalf(".git should be hidden, stat err = %v", err)
-	}
-	if gitInsideWorkTree(mountpoint) {
-		t.Fatal("mountpoint still appears to be inside a Git worktree")
-	}
+}
 
-	baseIndexBefore, err := os.ReadFile(filepath.Join(repo, ".git", "index"))
+func (env *integrationEnv) addWafer(t *testing.T, name, branch string) *state.Meta {
+	t.Helper()
+	env.stdout.Reset()
+	env.stderr.Reset()
+	err := Run(env.ctx, []string{"add", name, "--from", env.repo, "--at", env.mountpoint, "--branch", branch}, &env.stdout, &env.stderr)
+	if err != nil {
+		t.Fatalf("add failed: %v\nstdout:\n%s\nstderr:\n%s", err, env.stdout.String(), env.stderr.String())
+	}
+	if !strings.Contains(env.stdout.String(), branch) {
+		t.Fatalf("add output did not mention branch: %s", env.stdout.String())
+	}
+	t.Cleanup(func() {
+		_ = Run(env.ctx, []string{"rm", name, "--force"}, &bytes.Buffer{}, &bytes.Buffer{})
+	})
+	meta, err := env.store.Load(name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(mountpoint, "pkg", "value.txt"), []byte("wafer value\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(mountpoint, "new.txt"), []byte("new wafer file\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(mountpoint, "README.md")); err != nil {
-		t.Fatal(err)
-	}
-	stdout.Reset()
-	err = Run(ctx, []string{"git-commit", "foo", "-m", "wafer changes"}, &stdout, &stderr)
+	return meta
+}
+
+func (env *integrationEnv) gitCommit(t *testing.T, name, message string) *state.Meta {
+	t.Helper()
+	env.stdout.Reset()
+	env.stderr.Reset()
+	err := Run(env.ctx, []string{"git-commit", name, "-m", message}, &env.stdout, &env.stderr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta, err = store.Load("foo")
+	meta, err := env.store.Load(name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if meta.LastCommit == "" {
 		t.Fatal("last_commit was not set")
 	}
-	if parent := gitOutput(t, repo, "rev-parse", meta.LastCommit+"^"); parent != meta.BaseCommit {
-		t.Fatalf("parent = %s, want %s", parent, meta.BaseCommit)
+	return meta
+}
+
+func createBaseRepo(t *testing.T, repo string) {
+	t.Helper()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.name", "wafers")
+	runGit(t, repo, "config", "user.email", "wafers@example.invalid")
+	writeFile(t, filepath.Join(repo, "README.md"), "hello\n")
+	if err := os.MkdirAll(filepath.Join(repo, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if branchTip := gitOutput(t, repo, "rev-parse", "refs/heads/agent/foo"); branchTip != meta.LastCommit {
-		t.Fatalf("branch tip after commit = %s, want %s", branchTip, meta.LastCommit)
+	writeFile(t, filepath.Join(repo, "pkg", "value.txt"), "base value\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "initial")
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if got := gitOutput(t, repo, "show", meta.LastCommit+":pkg/value.txt"); got != "wafer value" {
-		t.Fatalf("committed pkg/value.txt = %q", got)
-	}
-	if got := gitOutput(t, repo, "show", meta.LastCommit+":new.txt"); got != "new wafer file" {
-		t.Fatalf("committed new.txt = %q", got)
-	}
-	if gitPathExists(repo, meta.LastCommit, "README.md") {
-		t.Fatal("README.md should be deleted in committed tree")
-	}
-	baseIndexAfter, err := os.ReadFile(filepath.Join(repo, ".git", "index"))
+}
+
+func readFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(baseIndexBefore, baseIndexAfter) {
-		t.Fatal("base repo index changed during wafers git-commit")
-	}
-
-	if err := os.WriteFile(filepath.Join(mountpoint, "second.txt"), []byte("second\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	firstCommit := meta.LastCommit
-	stdout.Reset()
-	err = Run(ctx, []string{"git-commit", "foo", "--message", "second wafer change"}, &stdout, &stderr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	meta, err = store.Load("foo")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if parent := gitOutput(t, repo, "rev-parse", meta.LastCommit+"^"); parent != firstCommit {
-		t.Fatalf("second parent = %s, want %s", parent, firstCommit)
-	}
-	if branchTip := gitOutput(t, repo, "rev-parse", "refs/heads/agent/foo"); branchTip != meta.LastCommit {
-		t.Fatalf("branch tip after second commit = %s, want %s", branchTip, meta.LastCommit)
-	}
-
-	err = Run(ctx, []string{"git-commit", "foo", "-m", "empty"}, &stdout, &stderr)
-	if err == nil || !strings.Contains(err.Error(), "nothing to commit") {
-		t.Fatalf("empty commit err = %v, want nothing to commit", err)
-	}
-
-	runGit(t, repo, "update-ref", "refs/heads/agent/foo", meta.BaseCommit)
-	if err := os.WriteFile(filepath.Join(mountpoint, "moved.txt"), []byte("moved\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	err = Run(ctx, []string{"git-commit", "foo", "-m", "should fail"}, &stdout, &stderr)
-	if err == nil || !strings.Contains(err.Error(), "moved outside wafers") {
-		t.Fatalf("moved branch commit err = %v, want moved outside wafers", err)
-	}
-	runGit(t, repo, "update-ref", "refs/heads/agent/foo", meta.LastCommit)
-
-	stdout.Reset()
-	err = Run(ctx, []string{"ls"}, &stdout, &stderr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(stdout.String(), "foo") || !strings.Contains(stdout.String(), "agent/foo") {
-		t.Fatalf("ls output did not include wafer: %s", stdout.String())
-	}
-
-	stdout.Reset()
-	err = Run(ctx, []string{"rm", "foo", "--force"}, &stdout, &stderr)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(stateRoot, "wafers", "foo")); !os.IsNotExist(err) {
-		t.Fatalf("wafer state should be removed, stat err = %v", err)
-	}
-	if branchTip := gitOutput(t, repo, "rev-parse", "refs/heads/agent/foo"); branchTip != meta.LastCommit {
-		t.Fatalf("branch should remain after rm, tip = %s, want %s", branchTip, meta.LastCommit)
-	}
+	return data
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

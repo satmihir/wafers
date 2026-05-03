@@ -109,5 +109,5 @@ fi
 test "$(git -C "$BASE" rev-parse refs/heads/agent/demo)" = "$COMMIT" || fail "wafer branch removed or changed after rm"
 log "rm --force removed wafer"
 
-WAFERS_INTEGRATION=1 go test ./internal/cli -run TestIntegrationAddListRemove -count=1
+WAFERS_INTEGRATION=1 go test ./internal/cli -run TestIntegration -count=1
 log "integration test passed"
