@@ -20,12 +20,24 @@ import (
 const usage = `wafers creates cheap repo views backed by fuse-overlayfs.
 
 Usage:
-  wafers add <name> --at <mountpoint> --branch <branch> [--from <repo>]
-  wafers git-commit <name> -m <message>
-  wafers ls
-  wafers rm <name> [--force]
-  wafers doctor
+  wafers <command> [args]
+
+Commands:
+  add         Create a wafer and local branch
+  git-commit  Commit the mounted wafer view onto its branch
+  ls          List known wafers
+  rm          Unmount and remove wafer state
+  doctor      Check host support
+  skill       Print an agent skill file
+
+Other:
+  help        Show command help
+  version     Print version
+
+Run "wafers help <command>" for details.
 `
+
+var Version = "dev"
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
@@ -34,23 +46,181 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	}
 	switch args[0] {
 	case "add":
+		if wantsCommandHelp(args[1:]) {
+			return printCommandHelp("add", stdout)
+		}
 		return runAdd(ctx, args[1:], stdout)
 	case "git-commit":
+		if wantsCommandHelp(args[1:]) {
+			return printCommandHelp("git-commit", stdout)
+		}
 		return runGitCommit(ctx, args[1:], stdout)
 	case "ls":
+		if wantsCommandHelp(args[1:]) {
+			return printCommandHelp("ls", stdout)
+		}
 		return runList(args[1:], stdout)
 	case "rm":
+		if wantsCommandHelp(args[1:]) {
+			return printCommandHelp("rm", stdout)
+		}
 		return runRemove(ctx, args[1:], stdout)
 	case "doctor":
+		if wantsCommandHelp(args[1:]) {
+			return printCommandHelp("doctor", stdout)
+		}
 		return runDoctor(ctx, args[1:], stdout)
-	case "-h", "--help", "help":
+	case "skill":
+		if wantsCommandHelp(args[1:]) {
+			return printCommandHelp("skill", stdout)
+		}
+		return runSkill(args[1:], stdout)
+	case "help":
+		if len(args) == 1 {
+			fmt.Fprint(stdout, usage)
+			return nil
+		}
+		if len(args) == 2 {
+			return printCommandHelp(args[1], stdout)
+		}
+		return errors.New("usage: wafers help [command]")
+	case "-h", "--help":
 		fmt.Fprint(stdout, usage)
+		return nil
+	case "-v", "--version", "version":
+		if len(args) != 1 {
+			return errors.New("usage: wafers version")
+		}
+		fmt.Fprintf(stdout, "wafers %s\n", Version)
 		return nil
 	default:
 		fmt.Fprint(stderr, usage)
 		return fmt.Errorf("unknown command %q", args[0])
 	}
 }
+
+func wantsCommandHelp(args []string) bool {
+	return len(args) == 1 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help")
+}
+
+func printCommandHelp(command string, stdout io.Writer) error {
+	help, ok := commandHelp[command]
+	if !ok {
+		return fmt.Errorf("unknown command %q", command)
+	}
+	fmt.Fprint(stdout, help)
+	return nil
+}
+
+var commandHelp = map[string]string{
+	"add": `wafers add - create a wafer and local branch
+
+Usage:
+  wafers add <name> --at <mountpoint> --branch <branch> [--from <repo>]
+
+Creates a fuse-overlayfs-backed repo view at <mountpoint>. The base repo is
+used as the read-only lowerdir. wafers creates the requested local branch at
+the base HEAD and records wafer metadata in the wafers state directory.
+
+Required:
+  <name>              Wafer name; use letters, numbers, dot, dash, underscore
+  --at <mountpoint>   Empty directory where the wafer will be mounted
+  --branch <branch>   New local branch to create for this wafer
+
+Optional:
+  --from <repo>       Base repo path; defaults to the current directory
+
+Example:
+  wafers add agent-1 --from /repo --at /tmp/agent-1 --branch agents/agent-1
+
+Notes:
+  - The branch must not already exist.
+  - The mountpoint must be outside other Git repos.
+  - .git is hidden inside the wafer view on purpose.
+`,
+	"git-commit": `wafers git-commit - commit the mounted wafer view
+
+Usage:
+  wafers git-commit <name> -m <message>
+
+Commits the entire mounted wafer view to the wafer branch. This is similar to
+"git add -A && git commit", but wafers uses a private index and Git plumbing so
+the base repo worktree and index are not modified.
+
+Required:
+  <name>              Wafer name
+  -m, --message       Commit message
+
+Example:
+  wafers git-commit agent-1 -m "fix parser"
+
+Notes:
+  - The wafer must be mounted.
+  - Empty commits are refused.
+  - If the wafer branch moved outside wafers, the commit is refused.
+`,
+	"ls": `wafers ls - list known wafers
+
+Usage:
+  wafers ls
+
+Shows wafer name, branch, base commit, last commit, mount status, and
+mountpoint.
+`,
+	"rm": `wafers rm - unmount and remove wafer state
+
+Usage:
+  wafers rm <name> [--force]
+
+Unmounts the wafer if mounted, deletes wafer state, and keeps the local branch
+and commits.
+
+Required:
+  <name>              Wafer name
+
+Optional:
+  --force             Remove even when the wafer upperdir has changes
+
+Example:
+  cd /tmp
+  wafers rm agent-1 --force
+
+Notes:
+  - If removal says the device is busy, leave the mountpoint and retry.
+`,
+	"doctor": `wafers doctor - check host support
+
+Usage:
+  wafers doctor
+
+Checks Linux, git, fuse-overlayfs, fusermount3, /dev/fuse, and a small test
+mount.
+
+Install hints:
+  Debian/Ubuntu: sudo apt install fuse-overlayfs fuse3 git
+  Fedora:        sudo dnf install fuse-overlayfs fuse3 git
+  Arch:          sudo pacman -S fuse-overlayfs fuse3 git
+`,
+	"skill": `wafers skill - print an agent skill file
+
+Usage:
+  wafers skill
+
+Prints Markdown instructions that teach an agent how to use wafers correctly.
+
+Example:
+  wafers skill > SKILL.md
+`,
+}
+
+const doctorInstallHints = `
+Install hints:
+  Debian/Ubuntu: sudo apt install fuse-overlayfs fuse3 git
+  Fedora:        sudo dnf install fuse-overlayfs fuse3 git
+  Arch:          sudo pacman -S fuse-overlayfs fuse3 git
+
+Containers must also expose /dev/fuse and allow FUSE mounts.
+`
 
 func runAdd(ctx context.Context, args []string, stdout io.Writer) error {
 	parsed, err := parseAddArgs(args)
@@ -167,7 +337,7 @@ func runList(args []string, stdout io.Writer) error {
 		return err
 	}
 	sort.Slice(metas, func(i, j int) bool { return metas[i].Name < metas[j].Name })
-	fmt.Fprintln(stdout, "NAME\tBRANCH\tBASE\tSTATUS\tMOUNTPOINT")
+	fmt.Fprintln(stdout, "NAME\tBRANCH\tBASE\tLAST\tSTATUS\tMOUNTPOINT")
 	for _, meta := range metas {
 		status := "unmounted"
 		if mount.IsMounted(meta.Mountpoint) {
@@ -177,11 +347,17 @@ func runList(args []string, stdout io.Writer) error {
 		if len(base) > 12 {
 			base = base[:12]
 		}
-		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\n", meta.Name, meta.Branch, base, status, meta.Mountpoint)
+		last := meta.LastCommit
+		if last == "" {
+			last = "-"
+		} else if len(last) > 12 {
+			last = last[:12]
+		}
+		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", meta.Name, meta.Branch, base, last, status, meta.Mountpoint)
 	}
 	sort.Strings(bad)
 	for _, entry := range bad {
-		fmt.Fprintf(stdout, "%s\t<invalid>\t-\terror\t-\n", entry)
+		fmt.Fprintf(stdout, "%s\t<invalid>\t-\t-\terror\t-\n", entry)
 	}
 	return nil
 }
@@ -326,8 +502,17 @@ func runDoctor(ctx context.Context, args []string, stdout io.Writer) error {
 	check("/dev/fuse", mount.CheckFuseDevice())
 	check("test mount", mount.TestMount(ctx))
 	if len(failures) > 0 {
+		fmt.Fprint(stdout, doctorInstallHints)
 		return fmt.Errorf("doctor found %d problem(s): %s", len(failures), strings.Join(failures, "; "))
 	}
+	return nil
+}
+
+func runSkill(args []string, stdout io.Writer) error {
+	if len(args) != 0 {
+		return errors.New("usage: wafers skill")
+	}
+	fmt.Fprint(stdout, skillMarkdown)
 	return nil
 }
 

@@ -3,8 +3,11 @@ package cli
 import (
 	"bytes"
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mihirsathe/wafers/internal/state"
 )
 
 func TestParseAddArgsSupportsDocumentedOrder(t *testing.T) {
@@ -102,7 +105,7 @@ func TestRunTopLevelCommands(t *testing.T) {
 	if err := Run(context.Background(), []string{"--help"}, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout.String(), "wafers add") {
+	if !strings.Contains(stdout.String(), "Commands:") || !strings.Contains(stdout.String(), "Run \"wafers help <command>\"") {
 		t.Fatalf("help output missing usage: %s", stdout.String())
 	}
 
@@ -122,5 +125,103 @@ func TestRunTopLevelCommands(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "Usage:") {
 		t.Fatalf("unknown command did not print usage: %s", stderr.String())
+	}
+}
+
+func TestRunCommandHelp(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"help", "add"}, "wafers add - create a wafer"},
+		{[]string{"add", "--help"}, "Usage:\n  wafers add <name>"},
+		{[]string{"git-commit", "-h"}, "wafers git-commit - commit"},
+		{[]string{"rm", "help"}, "wafers rm - unmount"},
+		{[]string{"doctor", "--help"}, "Install hints:"},
+		{[]string{"skill", "--help"}, "wafers skill > SKILL.md"},
+	}
+	for _, tt := range tests {
+		var stdout, stderr bytes.Buffer
+		if err := Run(context.Background(), tt.args, &stdout, &stderr); err != nil {
+			t.Fatalf("Run(%v) err = %v", tt.args, err)
+		}
+		if !strings.Contains(stdout.String(), tt.want) {
+			t.Fatalf("Run(%v) output missing %q:\n%s", tt.args, tt.want, stdout.String())
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"help", "nope"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("unknown help err = %v", err)
+	}
+	if err := Run(context.Background(), []string{"help", "add", "extra"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "usage: wafers help") {
+		t.Fatalf("extra help err = %v", err)
+	}
+}
+
+func TestRunVersion(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	old := Version
+	Version = "test-version"
+	t.Cleanup(func() { Version = old })
+
+	if err := Run(context.Background(), []string{"--version"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout.String(); got != "wafers test-version\n" {
+		t.Fatalf("version output = %q", got)
+	}
+	if err := Run(context.Background(), []string{"version", "extra"}, &stdout, &stderr); err == nil {
+		t.Fatal("version with extra args returned nil")
+	}
+}
+
+func TestRunListShowsLastCommit(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	store := &state.Store{Root: filepath.Join(root, "wafers")}
+	if err := store.Save(&state.Meta{
+		Name:       "foo",
+		Branch:     "agent/foo",
+		BaseCommit: "1234567890abcdef",
+		LastCommit: "fedcba0987654321",
+		Mountpoint: filepath.Join(root, "mnt"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"ls"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"NAME\tBRANCH\tBASE\tLAST\tSTATUS\tMOUNTPOINT", "1234567890ab", "fedcba098765"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("ls output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunSkill(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"skill"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	out := stdout.String()
+	for _, want := range []string{
+		"# wafers",
+		"Do not treat wafers as a sandbox",
+		"wafers add <name>",
+		"wafers git-commit <name>",
+		"git -C <base-repo> push origin <branch>",
+		"wafers rm <name> --force",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("skill output missing %q:\n%s", want, out)
+		}
+	}
+
+	stdout.Reset()
+	if err := Run(context.Background(), []string{"skill", "extra"}, &stdout, &stderr); err == nil {
+		t.Fatal("skill with extra args returned nil")
 	}
 }

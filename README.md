@@ -132,7 +132,12 @@ wafers git-commit <name> -m <message>
 wafers ls
 wafers rm <name> [--force]
 wafers doctor
+wafers skill
+wafers help [command]
+wafers version
 ```
+
+Run `wafers help <command>` for command-specific examples and notes.
 
 ### `wafers add`
 
@@ -184,6 +189,19 @@ wafers rm agent-1 --force
 
 If unmounting fails with `Device or resource busy`, make sure no shell or
 process has the wafer mountpoint as its current working directory.
+
+### `wafers skill`
+
+Prints a generic agent skill/instructions file for using wafers correctly.
+
+```sh
+wafers skill > SKILL.md
+```
+
+Install that `SKILL.md` wherever your agent runner loads skills or project
+instructions. The generated skill tells agents to work inside wafer mountpoints,
+commit through `wafers git-commit`, push branches from the base repo, and avoid
+editing the base checkout.
 
 ## Docker Demo
 
