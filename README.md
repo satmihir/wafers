@@ -204,6 +204,13 @@ wafers rm agent-1 --force
 If unmounting fails with `Device or resource busy`, make sure no shell or
 process has the wafer mountpoint as its current working directory.
 
+### `wafers doctor`
+
+Checks the Linux/FUSE prerequisites and reports whether Git can resolve an
+author identity for commits. Missing `user.name` or `user.email` is a warning,
+not a platform failure, but `wafers git-commit` needs an identity from Git config
+or `GIT_AUTHOR_NAME`/`GIT_AUTHOR_EMAIL`.
+
 ### `wafers skill`
 
 Prints a generic agent skill/instructions file for using wafers correctly.

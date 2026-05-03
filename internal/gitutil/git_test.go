@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -55,6 +56,18 @@ func TestResolveRepo(t *testing.T) {
 	}
 	if got.Head != gitOutCmd(t, repo, "rev-parse", "HEAD") {
 		t.Fatalf("Head = %q", got.Head)
+	}
+}
+
+func TestAuthorIdentityUsesRepoConfig(t *testing.T) {
+	ctx := context.Background()
+	repo := newGitRepo(t)
+	ident, err := AuthorIdentity(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ident, "wafers <wafers@example.invalid>") {
+		t.Fatalf("identity = %q", ident)
 	}
 }
 

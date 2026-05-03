@@ -45,6 +45,10 @@ func ValidateBranch(ctx context.Context, branch string) error {
 	return nil
 }
 
+func AuthorIdentity(ctx context.Context, dir string) (string, error) {
+	return gitOutput(ctx, dir, "var", "GIT_AUTHOR_IDENT")
+}
+
 func IsInsideWorkTree(ctx context.Context, dir string) bool {
 	out, err := gitOutput(ctx, dir, "rev-parse", "--is-inside-work-tree")
 	return err == nil && out == "true"

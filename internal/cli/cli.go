@@ -193,8 +193,10 @@ Notes:
 Usage:
   wafers doctor
 
-Checks Linux, git, fuse-overlayfs, fusermount3, /dev/fuse, and a small test
-mount.
+Checks Linux, git, Git author identity, fuse-overlayfs, fusermount3, /dev/fuse,
+and a small test mount. Missing author identity is reported as a warning because
+the host can still run wafers, but git-commit will need user.name/user.email or
+GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL.
 
 Install hints:
   Debian/Ubuntu: sudo apt install fuse-overlayfs fuse3 git
@@ -487,6 +489,7 @@ func runDoctor(ctx context.Context, args []string, stdout io.Writer) error {
 		return errors.New("usage: wafers doctor")
 	}
 	var failures []string
+	var warnings []string
 	check := func(label string, err error) {
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", label, err))
@@ -495,8 +498,24 @@ func runDoctor(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "OK   %s\n", label)
 	}
+	warn := func(label, hint string, err error) {
+		if err == nil {
+			fmt.Fprintf(stdout, "OK   %s\n", label)
+			return
+		}
+		warnings = append(warnings, fmt.Sprintf("%s: %v", label, err))
+		fmt.Fprintf(stdout, "WARN %s: %v\n", label, err)
+		if hint != "" {
+			fmt.Fprintf(stdout, "     %s\n", hint)
+		}
+	}
 	check("linux", requireLinux())
-	check("git", mount.LookPath("git"))
+	gitErr := mount.LookPath("git")
+	check("git", gitErr)
+	if gitErr == nil {
+		_, err := gitutil.AuthorIdentity(ctx, ".")
+		warn("git author identity", "set user.name/user.email with git config or export GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL", err)
+	}
 	check("fuse-overlayfs", mount.LookPath("fuse-overlayfs"))
 	check("fusermount3", mount.LookPath("fusermount3"))
 	check("/dev/fuse", mount.CheckFuseDevice())
@@ -504,6 +523,9 @@ func runDoctor(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(failures) > 0 {
 		fmt.Fprint(stdout, doctorInstallHints)
 		return fmt.Errorf("doctor found %d problem(s): %s", len(failures), strings.Join(failures, "; "))
+	}
+	if len(warnings) > 0 {
+		fmt.Fprintf(stdout, "doctor completed with %d warning(s)\n", len(warnings))
 	}
 	return nil
 }
