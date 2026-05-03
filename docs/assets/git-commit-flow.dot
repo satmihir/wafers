@@ -1,0 +1,52 @@
+digraph wafers_git_commit_flow {
+  graph [
+    rankdir=TB,
+    labelloc=t,
+    label="wafers git-commit flow",
+    fontname="Helvetica",
+    fontsize=20
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Helvetica",
+    fontsize=12,
+    fillcolor="#f7f7f7",
+    color="#555555"
+  ];
+
+  edge [
+    fontname="Helvetica",
+    fontsize=11,
+    color="#555555"
+  ];
+
+  start [shape=oval, label="wafers git-commit <name>\n-m <message>", fillcolor="#ecf7ff"];
+  load [label="load wafer metadata"];
+  mounted [shape=diamond, label="mountpoint mounted?"];
+  fail_mount [label="fail:\nwafer is not mounted", fillcolor="#ffecec"];
+  read_tip [label="read refs/heads/<branch>"];
+  moved [shape=diamond, label="tip == last_commit?"];
+  fail_moved [label="fail:\nbranch moved outside wafers", fillcolor="#ffecec"];
+  reset_index [label="remove private index\nread-tree branch tip"];
+  add_all [label="git add -A -- .\nwith GIT_INDEX_FILE\nand --work-tree=mountpoint"];
+  write_tree [label="write-tree"];
+  empty [shape=diamond, label="tree == parent tree?"];
+  fail_empty [label="fail:\nnothing to commit", fillcolor="#ffecec"];
+  commit_tree [label="commit-tree\nparent=branch tip"];
+  update_ref [label="update-ref branch\nnew commit, expected old tip"];
+  save_meta [label="save meta.json\nlast_commit = new commit"];
+  done [shape=oval, label="branch advanced", fillcolor="#ecffef"];
+
+  start -> load -> mounted;
+  mounted -> fail_mount [label="no"];
+  mounted -> read_tip [label="yes"];
+  read_tip -> moved;
+  moved -> fail_moved [label="no"];
+  moved -> reset_index [label="yes"];
+  reset_index -> add_all -> write_tree -> empty;
+  empty -> fail_empty [label="yes"];
+  empty -> commit_tree [label="no"];
+  commit_tree -> update_ref -> save_meta -> done;
+}

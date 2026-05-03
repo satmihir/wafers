@@ -1,0 +1,45 @@
+digraph wafers_add_flow {
+  graph [
+    rankdir=TB,
+    labelloc=t,
+    label="wafers add flow",
+    fontname="Helvetica",
+    fontsize=20
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Helvetica",
+    fontsize=12,
+    fillcolor="#f7f7f7",
+    color="#555555"
+  ];
+
+  edge [
+    fontname="Helvetica",
+    fontsize=11,
+    color="#555555"
+  ];
+
+  start [shape=oval, label="wafers add <name>\n--at <mountpoint>\n--branch <branch>", fillcolor="#ecf7ff"];
+  validate [label="validate name, branch,\nrepo, mountpoint"];
+  branch_check [shape=diamond, label="branch exists?"];
+  fail_branch [label="fail:\nbranch already exists", fillcolor="#ffecec"];
+  create_state [label="create wafer state\nupperdir, workdir, index path"];
+  mount [label="fuse-overlayfs mount\nlower=base repo\nupper=wafer upper"];
+  hide_git [label="remove mount/.git\ncreates wafer-local whiteout"];
+  git_check [shape=diamond, label="Git discoverable\ninside mount?"];
+  fail_git [label="cleanup + fail:\nmountpoint inside another Git repo", fillcolor="#ffecec"];
+  create_branch [label="create local branch\nat base HEAD"];
+  save_meta [label="write meta.json\nlast_commit = base HEAD"];
+  done [shape=oval, label="wafer ready", fillcolor="#ecffef"];
+
+  start -> validate -> branch_check;
+  branch_check -> fail_branch [label="yes"];
+  branch_check -> create_state [label="no"];
+  create_state -> mount -> hide_git -> git_check;
+  git_check -> fail_git [label="yes"];
+  git_check -> create_branch [label="no"];
+  create_branch -> save_meta -> done;
+}

@@ -73,7 +73,21 @@ Check the host:
 wafers doctor
 ```
 
-## Build
+## Install
+
+Install with Go:
+
+```sh
+go install github.com/satmihir/wafers/cmd/wafers@latest
+```
+
+Make sure Go's binary directory is on your `PATH`. It is usually:
+
+```sh
+$(go env GOPATH)/bin
+```
+
+From a local checkout, build directly:
 
 ```sh
 go build -o wafers ./cmd/wafers

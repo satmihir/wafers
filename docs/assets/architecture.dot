@@ -1,0 +1,61 @@
+digraph wafers_architecture {
+  graph [
+    rankdir=LR,
+    labelloc=t,
+    label="wafers architecture",
+    fontname="Helvetica",
+    fontsize=20
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Helvetica",
+    fontsize=12,
+    fillcolor="#f7f7f7",
+    color="#555555"
+  ];
+
+  edge [
+    fontname="Helvetica",
+    fontsize=11,
+    color="#555555"
+  ];
+
+  subgraph cluster_base {
+    label="base repository";
+    color="#999999";
+    base_worktree [label="base worktree\n(read by wafers)"];
+    base_git [label=".git\nobjects + refs"];
+    base_index [label="base Git index\n(not touched)"];
+  }
+
+  subgraph cluster_state {
+    label="wafers state";
+    color="#999999";
+    meta [label="meta.json\nname, branch, base, last"];
+    upper [label="upperdir\nwafer changes"];
+    work [label="workdir\noverlayfs work state"];
+    private_index [label="private Git index\nscratch for git-commit"];
+  }
+
+  subgraph cluster_mount {
+    label="wafer view";
+    color="#999999";
+    mount [label="mountpoint\nagent edits here"];
+    hidden_git [label=".git hidden\nwhiteout in upperdir"];
+  }
+
+  branch [label="local branch\nrefs/heads/<branch>", fillcolor="#ecf7ff"];
+
+  base_worktree -> mount [label="lowerdir"];
+  upper -> mount [label="upperdir"];
+  work -> mount [label="workdir"];
+  mount -> upper [label="agent writes"];
+  mount -> hidden_git [label="wafers hides .git"];
+  meta -> private_index [label="index path"];
+  private_index -> base_git [label="write tree/commit objects"];
+  base_git -> branch [label="update-ref"];
+  branch -> meta [label="last_commit mirrors tip"];
+  base_index -> private_index [style=dashed, label="separate"];
+}
