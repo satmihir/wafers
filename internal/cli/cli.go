@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mihirsathe/wafers/internal/gitutil"
-	"github.com/mihirsathe/wafers/internal/mount"
-	"github.com/mihirsathe/wafers/internal/state"
+	"github.com/satmihir/wafers/internal/gitutil"
+	"github.com/satmihir/wafers/internal/mount"
+	"github.com/satmihir/wafers/internal/state"
 )
 
 const usage = `wafers creates cheap repo views backed by fuse-overlayfs.

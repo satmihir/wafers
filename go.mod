@@ -1,3 +1,3 @@
-module github.com/mihirsathe/wafers
+module github.com/satmihir/wafers
 
 go 1.26

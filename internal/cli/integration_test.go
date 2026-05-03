@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mihirsathe/wafers/internal/state"
+	"github.com/satmihir/wafers/internal/state"
 )
 
 type integrationEnv struct {

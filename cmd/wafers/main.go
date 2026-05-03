@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/mihirsathe/wafers/internal/cli"
+	"github.com/satmihir/wafers/internal/cli"
 )
 
 func main() {
