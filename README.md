@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.png" alt="wafers logo" width="140">
+</p>
+
 # wafers
 
 Cheap, branch-backed repo views for parallel coding agents.
