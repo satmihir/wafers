@@ -212,6 +212,7 @@ func TestRunSkill(t *testing.T) {
 		"Do not treat wafers as a sandbox",
 		"wafers add <name>",
 		"wafers git-commit <name>",
+		"wafers ls",
 		"git -C <base-repo> push origin <branch>",
 		"wafers rm <name> --force",
 	} {
