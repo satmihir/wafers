@@ -39,14 +39,20 @@ container or sandbox outside wafers.
    wafers git-commit <name> -m "<message>"
    ` + "```" + `
 
-7. Inspect or push the branch from the base repo:
+7. Check wafer status and commit pointers:
+
+   ` + "```sh" + `
+   wafers ls
+   ` + "```" + `
+
+8. Inspect or push the branch from the base repo:
 
    ` + "```sh" + `
    git -C <base-repo> log --oneline --decorate --graph --all
    git -C <base-repo> push origin <branch>
    ` + "```" + `
 
-8. Clean up the wafer when finished:
+9. Clean up the wafer when finished:
 
    ` + "```sh" + `
    cd /tmp
@@ -69,6 +75,7 @@ wafers add parser-fix --from /repo --at /tmp/parser-fix --branch agents/parser-f
 cd /tmp/parser-fix
 # edit files
 wafers git-commit parser-fix -m "fix parser"
+wafers ls
 git -C /repo show --stat agents/parser-fix
 git -C /repo push origin agents/parser-fix
 cd /tmp
