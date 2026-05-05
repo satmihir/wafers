@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,6 +48,36 @@ func TestIntegrationAddCreatesBranchAndHidesGit(t *testing.T) {
 	err := Run(env.ctx, []string{"add", "bar", "--from", env.repo, "--at", filepath.Join(env.root, "mnt2"), "--branch", "agent/foo"}, &env.stdout, &env.stderr)
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("duplicate branch add err = %v, want already exists", err)
+	}
+}
+
+func TestIntegrationAddJSONOutput(t *testing.T) {
+	env := newIntegrationEnv(t)
+	env.stdout.Reset()
+	env.stderr.Reset()
+	err := Run(env.ctx, []string{"add", "foo", "--from", env.repo, "--at", env.mountpoint, "--branch", "agent/foo", "--json"}, &env.stdout, &env.stderr)
+	if err != nil {
+		t.Fatalf("add failed: %v\nstdout:\n%s\nstderr:\n%s", err, env.stdout.String(), env.stderr.String())
+	}
+	t.Cleanup(func() {
+		_ = Run(env.ctx, []string{"rm", "foo", "--force"}, &bytes.Buffer{}, &bytes.Buffer{})
+	})
+	var out struct {
+		Name       string `json:"name"`
+		Branch     string `json:"branch"`
+		BaseCommit string `json:"base_commit"`
+		LastCommit string `json:"last_commit"`
+		Mountpoint string `json:"mountpoint"`
+		Status     string `json:"status"`
+	}
+	if err := json.Unmarshal(env.stdout.Bytes(), &out); err != nil {
+		t.Fatalf("invalid json output: %v\n%s", err, env.stdout.String())
+	}
+	if out.Name != "foo" || out.Branch != "agent/foo" || out.Status != "mounted" || out.Mountpoint != env.mountpoint {
+		t.Fatalf("unexpected json output: %#v", out)
+	}
+	if out.BaseCommit == "" || out.LastCommit != out.BaseCommit {
+		t.Fatalf("unexpected commit fields: %#v", out)
 	}
 }
 
