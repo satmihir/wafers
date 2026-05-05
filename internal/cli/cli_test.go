@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +18,16 @@ func TestParseAddArgsSupportsDocumentedOrder(t *testing.T) {
 	}
 	if got.Name != "demo" || got.At != "/tmp/view" || got.Branch != "agent/demo" || got.From != "/repo" {
 		t.Fatalf("unexpected args: %#v", got)
+	}
+}
+
+func TestParseAddArgsSupportsJSON(t *testing.T) {
+	got, err := parseAddArgs([]string{"demo", "--at", "/tmp/view", "--branch", "agent/demo", "--json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.JSON {
+		t.Fatalf("expected JSON flag to be set: %#v", got)
 	}
 }
 
@@ -198,6 +209,62 @@ func TestRunListShowsLastCommit(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("ls output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestParseListArgs(t *testing.T) {
+	got, err := parseListArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.JSON {
+		t.Fatalf("unexpected JSON flag: %#v", got)
+	}
+	got, err = parseListArgs([]string{"--json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.JSON {
+		t.Fatalf("expected JSON flag: %#v", got)
+	}
+	if _, err := parseListArgs([]string{"--bad"}); err == nil {
+		t.Fatal("parseListArgs accepted unknown flag")
+	}
+}
+
+func TestRunListJSON(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", root)
+	store := &state.Store{Root: filepath.Join(root, "wafers")}
+	if err := store.Save(&state.Meta{
+		Name:       "foo",
+		Branch:     "agent/foo",
+		BaseCommit: "1234567890abcdef",
+		LastCommit: "fedcba0987654321",
+		Mountpoint: filepath.Join(root, "mnt"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"ls", "--json"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Wafers []struct {
+			Name       string `json:"name"`
+			Branch     string `json:"branch"`
+			BaseCommit string `json:"base_commit"`
+			LastCommit string `json:"last_commit"`
+			Status     string `json:"status"`
+			Mountpoint string `json:"mountpoint"`
+		} `json:"wafers"`
+		InvalidEntries []string `json:"invalid_entries"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("invalid json output: %v\n%s", err, stdout.String())
+	}
+	if len(out.Wafers) != 1 || out.Wafers[0].Name != "foo" || out.Wafers[0].Status != "unmounted" {
+		t.Fatalf("unexpected wafers output: %#v", out.Wafers)
 	}
 }
 

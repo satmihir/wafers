@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -116,7 +117,7 @@ var commandHelp = map[string]string{
 	"add": `wafers add - create a wafer and local branch
 
 Usage:
-  wafers add <name> --at <mountpoint> --branch <branch> [--from <repo>]
+  wafers add <name> --at <mountpoint> --branch <branch> [--from <repo>] [--json]
 
 Creates a fuse-overlayfs-backed repo view at <mountpoint>. The base repo is
 used as the read-only lowerdir. wafers creates the requested local branch at
@@ -129,6 +130,7 @@ Required:
 
 Optional:
   --from <repo>       Base repo path; defaults to the current directory
+  --json              Print machine-readable JSON output
 
 Example:
   wafers add agent-1 --from /repo --at /tmp/agent-1 --branch agents/agent-1
@@ -162,10 +164,13 @@ Notes:
 	"ls": `wafers ls - list known wafers
 
 Usage:
-  wafers ls
+  wafers ls [--json]
 
 Shows wafer name, branch, base commit, last commit, mount status, and
 mountpoint.
+
+Options:
+  --json              Print machine-readable JSON output
 `,
 	"rm": `wafers rm - unmount and remove wafer state
 
@@ -322,13 +327,28 @@ func runAdd(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	cleanup = false
+	if parsed.JSON {
+		out := addJSONOutput{
+			Name:       meta.Name,
+			Branch:     meta.Branch,
+			BaseCommit: meta.BaseCommit,
+			LastCommit: meta.LastCommit,
+			Mountpoint: meta.Mountpoint,
+			Status:     "mounted",
+		}
+		if err := writeJSON(stdout, out); err != nil {
+			return err
+		}
+		return nil
+	}
 	fmt.Fprintf(stdout, "created wafer %q at %s on branch %s\n", name, mountpoint, parsed.Branch)
 	return nil
 }
 
 func runList(args []string, stdout io.Writer) error {
-	if len(args) != 0 {
-		return errors.New("usage: wafers ls")
+	parsed, err := parseListArgs(args)
+	if err != nil {
+		return err
 	}
 	store, err := state.OpenDefault()
 	if err != nil {
@@ -339,6 +359,28 @@ func runList(args []string, stdout io.Writer) error {
 		return err
 	}
 	sort.Slice(metas, func(i, j int) bool { return metas[i].Name < metas[j].Name })
+	sort.Strings(bad)
+	if parsed.JSON {
+		out := listJSONOutput{
+			Wafers:         make([]listWaferJSONOutput, 0, len(metas)),
+			InvalidEntries: bad,
+		}
+		for _, meta := range metas {
+			status := "unmounted"
+			if mount.IsMounted(meta.Mountpoint) {
+				status = "mounted"
+			}
+			out.Wafers = append(out.Wafers, listWaferJSONOutput{
+				Name:       meta.Name,
+				Branch:     meta.Branch,
+				BaseCommit: meta.BaseCommit,
+				LastCommit: meta.LastCommit,
+				Status:     status,
+				Mountpoint: meta.Mountpoint,
+			})
+		}
+		return writeJSON(stdout, out)
+	}
 	fmt.Fprintln(stdout, "NAME\tBRANCH\tBASE\tLAST\tSTATUS\tMOUNTPOINT")
 	for _, meta := range metas {
 		status := "unmounted"
@@ -357,7 +399,6 @@ func runList(args []string, stdout io.Writer) error {
 		}
 		fmt.Fprintf(stdout, "%s\t%s\t%s\t%s\t%s\t%s\n", meta.Name, meta.Branch, base, last, status, meta.Mountpoint)
 	}
-	sort.Strings(bad)
 	for _, entry := range bad {
 		fmt.Fprintf(stdout, "%s\t<invalid>\t-\t-\terror\t-\n", entry)
 	}
@@ -550,6 +591,7 @@ type addArgs struct {
 	At     string
 	Branch string
 	From   string
+	JSON   bool
 }
 
 func parseAddArgs(args []string) (addArgs, error) {
@@ -564,6 +606,8 @@ func parseAddArgs(args []string) (addArgs, error) {
 			}
 			i++
 			setAddFlag(&parsed, arg, args[i])
+		case arg == "--json":
+			parsed.JSON = true
 		case strings.HasPrefix(arg, "--at="):
 			parsed.At = strings.TrimPrefix(arg, "--at=")
 		case strings.HasPrefix(arg, "--branch="):
@@ -597,6 +641,10 @@ func setAddFlag(parsed *addArgs, flag, value string) {
 type removeArgs struct {
 	Name  string
 	Force bool
+}
+
+type listArgs struct {
+	JSON bool
 }
 
 type gitCommitArgs struct {
@@ -665,4 +713,46 @@ func parseRemoveArgs(args []string) (removeArgs, error) {
 	}
 	parsed.Name = positional[0]
 	return parsed, nil
+}
+
+func parseListArgs(args []string) (listArgs, error) {
+	var parsed listArgs
+	for _, arg := range args {
+		switch arg {
+		case "--json":
+			parsed.JSON = true
+		default:
+			return listArgs{}, errors.New("usage: wafers ls [--json]")
+		}
+	}
+	return parsed, nil
+}
+
+type addJSONOutput struct {
+	Name       string `json:"name"`
+	Branch     string `json:"branch"`
+	BaseCommit string `json:"base_commit"`
+	LastCommit string `json:"last_commit"`
+	Mountpoint string `json:"mountpoint"`
+	Status     string `json:"status"`
+}
+
+type listWaferJSONOutput struct {
+	Name       string `json:"name"`
+	Branch     string `json:"branch"`
+	BaseCommit string `json:"base_commit"`
+	LastCommit string `json:"last_commit"`
+	Status     string `json:"status"`
+	Mountpoint string `json:"mountpoint"`
+}
+
+type listJSONOutput struct {
+	Wafers         []listWaferJSONOutput `json:"wafers"`
+	InvalidEntries []string              `json:"invalid_entries"`
+}
+
+func writeJSON(stdout io.Writer, v any) error {
+	enc := json.NewEncoder(stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
 }
