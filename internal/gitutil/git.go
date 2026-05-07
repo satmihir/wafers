@@ -50,7 +50,7 @@ func AuthorIdentity(ctx context.Context, dir string) (string, error) {
 }
 
 func WorktreeStatus(ctx context.Context, root string) (string, error) {
-	return gitRawOutput(ctx, root, "status", "--porcelain=v1", "--untracked-files=normal")
+	return gitOutputPreserveStatus(ctx, root, "status", "--porcelain=v1", "--untracked-files=normal")
 }
 
 func WorktreeClean(ctx context.Context, root string) (bool, string, error) {
@@ -133,8 +133,12 @@ func gitOutput(ctx context.Context, dir string, args ...string) (string, error) 
 	return runGit(ctx, dir, nil, args...)
 }
 
-func gitRawOutput(ctx context.Context, dir string, args ...string) (string, error) {
-	return runGitRaw(ctx, dir, nil, args...)
+func gitOutputPreserveStatus(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := runGitCommand(ctx, dir, nil, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(out, "\r\n"), nil
 }
 
 func gitWithDir(ctx context.Context, dir, gitDir string, args ...string) (string, error) {
@@ -149,14 +153,14 @@ func gitWithIndex(ctx context.Context, dir, gitDir, indexPath string, args ...st
 }
 
 func runGit(ctx context.Context, dir string, env []string, args ...string) (string, error) {
-	out, err := runGitRaw(ctx, dir, env, args...)
+	out, err := runGitCommand(ctx, dir, env, args...)
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
 }
 
-func runGitRaw(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+func runGitCommand(ctx context.Context, dir string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	if env != nil {
@@ -172,5 +176,5 @@ func runGitRaw(ctx context.Context, dir string, env []string, args ...string) (s
 		}
 		return "", fmt.Errorf("%s", msg)
 	}
-	return strings.TrimRight(string(out), "\r\n"), nil
+	return string(out), nil
 }
