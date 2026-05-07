@@ -50,7 +50,7 @@ func AuthorIdentity(ctx context.Context, dir string) (string, error) {
 }
 
 func WorktreeStatus(ctx context.Context, root string) (string, error) {
-	return gitOutputPreserveStatus(ctx, root, "status", "--porcelain=v1", "--untracked-files=normal")
+	return gitOutputPreserveStatus(ctx, root, "status", "--porcelain=v1", "--untracked-files=normal", "--ignored=no")
 }
 
 func WorktreeClean(ctx context.Context, root string) (bool, string, error) {
