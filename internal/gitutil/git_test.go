@@ -71,6 +71,90 @@ func TestAuthorIdentityUsesRepoConfig(t *testing.T) {
 	}
 }
 
+func TestWorktreeClean(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, repo string)
+		clean bool
+		want  string
+	}{
+		{
+			name:  "clean repo",
+			clean: true,
+		},
+		{
+			name: "modified tracked file",
+			setup: func(t *testing.T, repo string) {
+				if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("changed\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "M README.md",
+		},
+		{
+			name: "staged file",
+			setup: func(t *testing.T, repo string) {
+				if err := os.WriteFile(filepath.Join(repo, "staged.txt"), []byte("staged\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				runGitCmd(t, repo, "add", "staged.txt")
+			},
+			want: "A  staged.txt",
+		},
+		{
+			name: "deleted tracked file",
+			setup: func(t *testing.T, repo string) {
+				if err := os.Remove(filepath.Join(repo, "README.md")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: " D README.md",
+		},
+		{
+			name: "untracked file",
+			setup: func(t *testing.T, repo string) {
+				if err := os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("untracked\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: "?? untracked.txt",
+		},
+		{
+			name: "ignored file",
+			setup: func(t *testing.T, repo string) {
+				if err := os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("ignored.log\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				runGitCmd(t, repo, "add", ".gitignore")
+				runGitCmd(t, repo, "commit", "-m", "ignore logs")
+				if err := os.WriteFile(filepath.Join(repo, "ignored.log"), []byte("ignored\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+			clean: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newGitRepo(t)
+			if tt.setup != nil {
+				tt.setup(t, repo)
+			}
+			clean, status, err := WorktreeClean(ctx, repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if clean != tt.clean {
+				t.Fatalf("clean = %v, want %v; status = %q", clean, tt.clean, status)
+			}
+			if tt.want != "" && !strings.Contains(status, tt.want) {
+				t.Fatalf("status = %q, want entry containing %q", status, tt.want)
+			}
+		})
+	}
+}
+
 func TestLocalBranchHelpers(t *testing.T) {
 	ctx := context.Background()
 	repo := newGitRepo(t)

@@ -164,6 +164,7 @@ wafers add agent-1 --from /src/repo --at /tmp/agent-1 --branch agents/agent-1
 Rules:
 
 - `--from` defaults to the current directory.
+- the base repo worktree must be clean, except for ignored files.
 - `--branch` must be a valid branch name and must not already exist.
 - the mountpoint is created if missing, but must be empty.
 - `.git` is hidden in the wafer view with overlay whiteout state.

@@ -99,18 +99,21 @@ Graphviz source: [assets/add-flow.dot](assets/add-flow.dot).
 
 High-level flow:
 
-1. Validate wafer name, branch name, repo, and mountpoint.
-2. Refuse to continue if the requested local branch already exists.
-3. Record the base repo root, Git dir, and current `HEAD`.
-4. Create wafer state directories.
-5. Mount `fuse-overlayfs` with:
+1. Validate wafer name, branch name, and repo.
+2. Refuse to continue if the base repo worktree is not clean, except for
+   ignored files.
+3. Refuse to continue if the requested local branch already exists.
+4. Resolve the mountpoint and ensure it is empty.
+5. Record the base repo root, Git dir, and current `HEAD`.
+6. Create wafer state directories.
+7. Mount `fuse-overlayfs` with:
    - `lowerdir = base repo`
    - `upperdir = wafer upperdir`
    - `workdir = wafer workdir`
-6. Remove `.git` from the mounted view, creating wafer-local whiteout state.
-7. Verify Git is not discoverable from the wafer mountpoint.
-8. Create `refs/heads/<branch>` at the base commit.
-9. Save metadata with `last_commit = base_commit`.
+8. Remove `.git` from the mounted view, creating wafer-local whiteout state.
+9. Verify Git is not discoverable from the wafer mountpoint.
+10. Create `refs/heads/<branch>` at the base commit.
+11. Save metadata with `last_commit = base_commit`.
 
 If setup fails after partial state is created, `add` attempts to unmount, remove
 wafer state, and delete the branch if wafers created it.
@@ -236,6 +239,8 @@ Common failures and expected handling:
   or mount capability.
 - Mountpoint inside another Git repo: `add` fails because Git can still discover
   a parent `.git`.
+- Dirty base repo: `add` fails because the live lowerdir must match the
+  recorded base commit.
 - Branch already exists: `add` fails to avoid ambiguous branch ownership.
 - Branch moved outside wafers: `git-commit` fails to avoid clobbering work.
 - Nothing changed: `git-commit` fails with `nothing to commit`.

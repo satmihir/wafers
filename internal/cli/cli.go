@@ -136,6 +136,7 @@ Example:
   wafers add agent-1 --from /repo --at /tmp/agent-1 --branch agents/agent-1
 
 Notes:
+  - The base repo worktree must be clean, except for ignored files.
   - The branch must not already exist.
   - The mountpoint must be outside other Git repos.
   - .git is hidden inside the wafer view on purpose.
@@ -268,6 +269,13 @@ func runAdd(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	clean, status, err := gitutil.WorktreeClean(ctx, repo.Root)
+	if err != nil {
+		return fmt.Errorf("check base repo worktree: %w", err)
+	}
+	if !clean {
+		return dirtyBaseWorktreeError(status)
+	}
 	if gitutil.LocalBranchExists(ctx, repo.GitDir, parsed.Branch) {
 		return fmt.Errorf("branch %q already exists", parsed.Branch)
 	}
@@ -343,6 +351,23 @@ func runAdd(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 	fmt.Fprintf(stdout, "created wafer %q at %s on branch %s\n", name, mountpoint, parsed.Branch)
 	return nil
+}
+
+func dirtyBaseWorktreeError(status string) error {
+	msg := "base repo worktree is not clean; commit, stash, or remove changes before creating a wafer"
+	if first := firstStatusEntry(status); first != "" {
+		msg += "; first status entry: " + first
+	}
+	return errors.New(msg)
+}
+
+func firstStatusEntry(status string) string {
+	for _, line := range strings.Split(status, "\n") {
+		if strings.TrimSpace(line) != "" {
+			return strings.TrimRight(line, "\r")
+		}
+	}
+	return ""
 }
 
 func runList(args []string, stdout io.Writer) error {

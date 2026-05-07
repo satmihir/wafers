@@ -111,6 +111,16 @@ func TestParseGitCommitArgsRejectsInvalidForms(t *testing.T) {
 	}
 }
 
+func TestFirstStatusEntry(t *testing.T) {
+	got := firstStatusEntry("\n M README.md\n?? scratch.txt\n")
+	if got != " M README.md" {
+		t.Fatalf("firstStatusEntry = %q", got)
+	}
+	if got := firstStatusEntry("\n\t\n"); got != "" {
+		t.Fatalf("firstStatusEntry for blank status = %q", got)
+	}
+}
+
 func TestRunTopLevelCommands(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if err := Run(context.Background(), []string{"--help"}, &stdout, &stderr); err != nil {
