@@ -81,6 +81,65 @@ func TestIntegrationAddJSONOutput(t *testing.T) {
 	}
 }
 
+func TestIntegrationAddRefusesDirtyBaseRepo(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, env *integrationEnv)
+		want  string
+	}{
+		{
+			name: "modified tracked file",
+			setup: func(t *testing.T, env *integrationEnv) {
+				writeFile(t, filepath.Join(env.repo, "README.md"), "dirty\n")
+			},
+			want: "README.md",
+		},
+		{
+			name: "untracked file",
+			setup: func(t *testing.T, env *integrationEnv) {
+				writeFile(t, filepath.Join(env.repo, "scratch.txt"), "scratch\n")
+			},
+			want: "scratch.txt",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newIntegrationEnv(t)
+			tt.setup(t, env)
+
+			err := Run(env.ctx, []string{"add", "foo", "--from", env.repo, "--at", env.mountpoint, "--branch", "agent/foo"}, &env.stdout, &env.stderr)
+			if err == nil || !strings.Contains(err.Error(), "base repo worktree is not clean") || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("add err = %v, want dirty base mentioning %q", err, tt.want)
+			}
+			if _, err := env.store.Load("foo"); !os.IsNotExist(err) {
+				t.Fatalf("wafer metadata should not exist, err = %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(env.stateRoot, "wafers", "foo")); !os.IsNotExist(err) {
+				t.Fatalf("wafer state dir should not exist, err = %v", err)
+			}
+			if branchExists(t, env.repo, "agent/foo") {
+				t.Fatal("branch should not be created")
+			}
+			if mountpointExists, err := pathExists(env.mountpoint); err != nil || mountpointExists {
+				t.Fatalf("mountpoint should not be created, exists=%v err=%v", mountpointExists, err)
+			}
+		})
+	}
+}
+
+func TestIntegrationAddAllowsIgnoredBaseFiles(t *testing.T) {
+	env := newIntegrationEnv(t)
+	writeFile(t, filepath.Join(env.repo, ".gitignore"), "ignored.log\n")
+	runGit(t, env.repo, "add", ".gitignore")
+	runGit(t, env.repo, "commit", "-m", "ignore logs")
+	writeFile(t, filepath.Join(env.repo, "ignored.log"), "ignored\n")
+
+	meta := env.addWafer(t, "foo", "agent/foo")
+	if meta.LastCommit != meta.BaseCommit {
+		t.Fatalf("last_commit after add = %s, want base %s", meta.LastCommit, meta.BaseCommit)
+	}
+}
+
 func TestIntegrationGitCommitAdvancesBranch(t *testing.T) {
 	env := newIntegrationEnv(t)
 	meta := env.addWafer(t, "foo", "agent/foo")
@@ -299,9 +358,27 @@ func gitPathExists(dir, commit, path string) bool {
 	return cmd.Run() == nil
 }
 
+func branchExists(t *testing.T, dir, branch string) bool {
+	t.Helper()
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	cmd.Dir = dir
+	return cmd.Run() == nil
+}
+
 func gitInsideWorkTree(dir string) bool {
 	cmd := exec.Command("git", "rev-parse", "--is-inside-work-tree")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+func pathExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }

@@ -62,6 +62,7 @@ container or sandbox outside wafers.
 ## Rules
 
 - Never edit the base repo worktree for wafer task changes.
+- Before creating a wafer, keep the base repo clean except for ignored files.
 - Never use the base repo index as part of the task.
 - Use unique branch names; wafers add refuses an existing branch.
 - Mount wafers outside other Git repos so Git cannot discover a parent .git.

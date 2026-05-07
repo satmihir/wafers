@@ -23,9 +23,12 @@ digraph wafers_add_flow {
   ];
 
   start [shape=oval, label="wafers add <name>\n--at <mountpoint>\n--branch <branch>", fillcolor="#ecf7ff"];
-  validate [label="validate name, branch,\nrepo, mountpoint"];
+  validate [label="validate name, branch,\nand repo"];
+  clean_check [shape=diamond, label="base worktree\nclean?"];
+  fail_dirty [label="fail:\nbase repo dirty", fillcolor="#ffecec"];
   branch_check [shape=diamond, label="branch exists?"];
   fail_branch [label="fail:\nbranch already exists", fillcolor="#ffecec"];
+  mountpoint_check [label="resolve mountpoint\nand ensure empty"];
   create_state [label="create wafer state\nupperdir, workdir, index path"];
   mount [label="fuse-overlayfs mount\nlower=base repo\nupper=wafer upper"];
   hide_git [label="remove mount/.git\ncreates wafer-local whiteout"];
@@ -35,9 +38,12 @@ digraph wafers_add_flow {
   save_meta [label="write meta.json\nlast_commit = base HEAD"];
   done [shape=oval, label="wafer ready", fillcolor="#ecffef"];
 
-  start -> validate -> branch_check;
+  start -> validate -> clean_check;
+  clean_check -> fail_dirty [label="no"];
+  clean_check -> branch_check [label="yes"];
   branch_check -> fail_branch [label="yes"];
-  branch_check -> create_state [label="no"];
+  branch_check -> mountpoint_check [label="no"];
+  mountpoint_check -> create_state;
   create_state -> mount -> hide_git -> git_check;
   git_check -> fail_git [label="yes"];
   git_check -> create_branch [label="no"];

@@ -49,6 +49,18 @@ func AuthorIdentity(ctx context.Context, dir string) (string, error) {
 	return gitOutput(ctx, dir, "var", "GIT_AUTHOR_IDENT")
 }
 
+func WorktreeStatus(ctx context.Context, root string) (string, error) {
+	return gitOutputPreserveStatus(ctx, root, "status", "--porcelain=v1", "--untracked-files=normal", "--ignored=no")
+}
+
+func WorktreeClean(ctx context.Context, root string) (bool, string, error) {
+	status, err := WorktreeStatus(ctx, root)
+	if err != nil {
+		return false, "", err
+	}
+	return status == "", status, nil
+}
+
 func IsInsideWorkTree(ctx context.Context, dir string) bool {
 	out, err := gitOutput(ctx, dir, "rev-parse", "--is-inside-work-tree")
 	return err == nil && out == "true"
@@ -121,6 +133,14 @@ func gitOutput(ctx context.Context, dir string, args ...string) (string, error) 
 	return runGit(ctx, dir, nil, args...)
 }
 
+func gitOutputPreserveStatus(ctx context.Context, dir string, args ...string) (string, error) {
+	out, err := runGitCommand(ctx, dir, nil, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(out, "\r\n"), nil
+}
+
 func gitWithDir(ctx context.Context, dir, gitDir string, args ...string) (string, error) {
 	fullArgs := append([]string{"--git-dir", gitDir}, args...)
 	return runGit(ctx, dir, nil, fullArgs...)
@@ -133,6 +153,14 @@ func gitWithIndex(ctx context.Context, dir, gitDir, indexPath string, args ...st
 }
 
 func runGit(ctx context.Context, dir string, env []string, args ...string) (string, error) {
+	out, err := runGitCommand(ctx, dir, env, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func runGitCommand(ctx context.Context, dir string, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	if env != nil {
@@ -148,5 +176,5 @@ func runGit(ctx context.Context, dir string, env []string, args ...string) (stri
 		}
 		return "", fmt.Errorf("%s", msg)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return string(out), nil
 }
