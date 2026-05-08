@@ -45,14 +45,20 @@ container or sandbox outside wafers.
    wafers ls
    ` + "```" + `
 
-8. Inspect or push the branch from the base repo:
+8. Inspect committed wafer changes:
+
+   ` + "```sh" + `
+   wafers git-diff <name>
+   ` + "```" + `
+
+9. Push the branch from the base repo:
 
    ` + "```sh" + `
    git -C <base-repo> log --oneline --decorate --graph --all
    git -C <base-repo> push origin <branch>
    ` + "```" + `
 
-9. Clean up the wafer when finished:
+10. Clean up the wafer when finished:
 
    ` + "```sh" + `
    cd /tmp
@@ -77,7 +83,7 @@ cd /tmp/parser-fix
 # edit files
 wafers git-commit parser-fix -m "fix parser"
 wafers ls
-git -C /repo show --stat agents/parser-fix
+wafers git-diff parser-fix
 git -C /repo push origin agents/parser-fix
 cd /tmp
 wafers rm parser-fix --force

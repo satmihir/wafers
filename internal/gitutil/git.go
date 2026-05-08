@@ -129,6 +129,10 @@ func PathExistsInCommit(ctx context.Context, gitDir, commit, path string) bool {
 	return err == nil
 }
 
+func Diff(ctx context.Context, repoRoot, base, branch string) (string, error) {
+	return gitOutputPreserveRaw(ctx, repoRoot, "diff", base+"..."+branch)
+}
+
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
 	return runGit(ctx, dir, nil, args...)
 }
@@ -139,6 +143,10 @@ func gitOutputPreserveStatus(ctx context.Context, dir string, args ...string) (s
 		return "", err
 	}
 	return strings.TrimRight(out, "\r\n"), nil
+}
+
+func gitOutputPreserveRaw(ctx context.Context, dir string, args ...string) (string, error) {
+	return runGitCommand(ctx, dir, nil, args...)
 }
 
 func gitWithDir(ctx context.Context, dir, gitDir string, args ...string) (string, error) {

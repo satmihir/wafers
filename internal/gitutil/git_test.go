@@ -253,6 +253,25 @@ func TestPrivateIndexCommitFlowDoesNotTouchBaseIndex(t *testing.T) {
 	}
 }
 
+func TestDiff(t *testing.T) {
+	ctx := context.Background()
+	repo := newGitRepo(t)
+	base := gitOutCmd(t, repo, "rev-parse", "HEAD")
+	branchCommit := commitFile(t, repo, "new.txt", "new\n", "new")
+	runGitCmd(t, repo, "branch", "agent/foo", branchCommit)
+	runGitCmd(t, repo, "checkout", "master")
+
+	diff, err := Diff(ctx, repo, base, "agent/foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"diff --git a/new.txt b/new.txt", "+new"} {
+		if !strings.Contains(diff, want) {
+			t.Fatalf("diff missing %q:\n%s", want, diff)
+		}
+	}
+}
+
 func newGitRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()

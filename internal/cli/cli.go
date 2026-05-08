@@ -26,6 +26,7 @@ Usage:
 Commands:
   add         Create a wafer and local branch
   git-commit  Commit the mounted wafer view onto its branch
+  git-diff    Show committed wafer branch changes
   ls          List known wafers
   rm          Unmount and remove wafer state
   doctor      Check host support
@@ -56,6 +57,11 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			return printCommandHelp("git-commit", stdout)
 		}
 		return runGitCommit(ctx, args[1:], stdout)
+	case "git-diff":
+		if wantsCommandHelp(args[1:]) {
+			return printCommandHelp("git-diff", stdout)
+		}
+		return runGitDiff(ctx, args[1:], stdout)
 	case "ls":
 		if wantsCommandHelp(args[1:]) {
 			return printCommandHelp("ls", stdout)
@@ -161,6 +167,24 @@ Notes:
   - The wafer must be mounted.
   - Empty commits are refused.
   - If the wafer branch moved outside wafers, the commit is refused.
+`,
+	"git-diff": `wafers git-diff - show committed wafer branch changes
+
+Usage:
+  wafers git-diff <name>
+
+Shows the committed diff between the wafer base commit and the current wafer
+branch tip. The wafer does not need to be mounted.
+
+Required:
+  <name>              Wafer name
+
+Example:
+  wafers git-diff agent-1
+
+Notes:
+  - This shows committed wafer branch changes only.
+  - Uncommitted edits in the wafer mount are not included.
 `,
 	"ls": `wafers ls - list known wafers
 
@@ -504,6 +528,30 @@ func runGitCommit(ctx context.Context, args []string, stdout io.Writer) error {
 	return nil
 }
 
+func runGitDiff(ctx context.Context, args []string, stdout io.Writer) error {
+	name, err := parseNameOnlyArgs("git-diff", args)
+	if err != nil {
+		return err
+	}
+	if err := state.ValidateName(name); err != nil {
+		return err
+	}
+	store, err := state.OpenDefault()
+	if err != nil {
+		return err
+	}
+	meta, err := store.Load(name)
+	if err != nil {
+		return err
+	}
+	diff, err := gitutil.Diff(ctx, meta.BaseRepo, meta.BaseCommit, meta.Branch)
+	if err != nil {
+		return fmt.Errorf("diff wafer %q: %w", meta.Name, err)
+	}
+	fmt.Fprint(stdout, diff)
+	return nil
+}
+
 func shortSHA(sha string) string {
 	if len(sha) > 12 {
 		return sha[:12]
@@ -751,6 +799,13 @@ func parseListArgs(args []string) (listArgs, error) {
 		}
 	}
 	return parsed, nil
+}
+
+func parseNameOnlyArgs(command string, args []string) (string, error) {
+	if len(args) != 1 {
+		return "", fmt.Errorf("usage: wafers %s <name>", command)
+	}
+	return args[0], nil
 }
 
 type addJSONOutput struct {
