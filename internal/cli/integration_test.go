@@ -196,6 +196,78 @@ func TestIntegrationRepeatedGitCommitChainsFromPreviousCommit(t *testing.T) {
 	}
 }
 
+func TestIntegrationGitCommitSelectedPaths(t *testing.T) {
+	env := newIntegrationEnv(t)
+	meta := env.addWafer(t, "foo", "agent/foo")
+
+	writeFile(t, filepath.Join(env.mountpoint, "pkg", "value.txt"), "selected value\n")
+	writeFile(t, filepath.Join(env.mountpoint, "scratch.txt"), "scratch\n")
+	writeFile(t, filepath.Join(env.mountpoint, "selected.txt"), "selected\n")
+	if err := os.Remove(filepath.Join(env.mountpoint, "README.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	env.stdout.Reset()
+	env.stderr.Reset()
+	err := Run(env.ctx, []string{"git-commit", "foo", "-m", "selected paths", "--", "pkg/value.txt", "selected.txt"}, &env.stdout, &env.stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err = env.store.Load("foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := gitOutput(t, env.repo, "show", meta.LastCommit+":pkg/value.txt"); got != "selected value" {
+		t.Fatalf("selected pkg/value.txt = %q", got)
+	}
+	if got := gitOutput(t, env.repo, "show", meta.LastCommit+":selected.txt"); got != "selected" {
+		t.Fatalf("selected.txt = %q", got)
+	}
+	if gitPathExists(env.repo, meta.LastCommit, "scratch.txt") {
+		t.Fatal("unselected scratch.txt should not be committed")
+	}
+	if got := gitOutput(t, env.repo, "show", meta.LastCommit+":README.md"); got != "hello" {
+		t.Fatalf("unselected README.md deletion should not be committed, got %q", got)
+	}
+}
+
+func TestIntegrationGitCommitSelectedDeletedPath(t *testing.T) {
+	env := newIntegrationEnv(t)
+	meta := env.addWafer(t, "foo", "agent/foo")
+	if err := os.Remove(filepath.Join(env.mountpoint, "README.md")); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(env.mountpoint, "scratch.txt"), "scratch\n")
+
+	env.stdout.Reset()
+	env.stderr.Reset()
+	err := Run(env.ctx, []string{"git-commit", "foo", "-m", "delete readme", "--", "README.md"}, &env.stdout, &env.stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, err = env.store.Load("foo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gitPathExists(env.repo, meta.LastCommit, "README.md") {
+		t.Fatal("selected README.md deletion should be committed")
+	}
+	if gitPathExists(env.repo, meta.LastCommit, "scratch.txt") {
+		t.Fatal("unselected scratch.txt should not be committed")
+	}
+}
+
+func TestIntegrationGitCommitRejectsUnsafeSelectedPath(t *testing.T) {
+	env := newIntegrationEnv(t)
+	env.addWafer(t, "foo", "agent/foo")
+	writeFile(t, filepath.Join(env.mountpoint, "pkg", "value.txt"), "selected value\n")
+
+	err := Run(env.ctx, []string{"git-commit", "foo", "-m", "bad path", "--", "../outside.txt"}, &env.stdout, &env.stderr)
+	if err == nil || !strings.Contains(err.Error(), "parent traversal") {
+		t.Fatalf("unsafe selected path err = %v, want parent traversal", err)
+	}
+}
+
 func TestIntegrationMovedBranchRefFailsGitCommit(t *testing.T) {
 	env := newIntegrationEnv(t)
 	meta := env.addWafer(t, "foo", "agent/foo")

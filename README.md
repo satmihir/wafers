@@ -142,7 +142,7 @@ commits.
 
 ```text
 wafers add <name> --at <mountpoint> --branch <branch> [--from <repo>]
-wafers git-commit <name> -m <message>
+wafers git-commit <name> -m <message> [-- <paths>...]
 wafers git-diff <name>
 wafers ls
 wafers rm <name> [--force]
@@ -178,6 +178,12 @@ Commits the entire mounted wafer view.
 wafers git-commit agent-1 -m "fix parser"
 ```
 
+To commit only selected paths, pass paths after `--`:
+
+```sh
+wafers git-commit agent-1 -m "fix parser" -- parser.go go.mod
+```
+
 Internally, this is similar to:
 
 ```sh
@@ -187,7 +193,9 @@ git commit
 
 but it uses a wafer-private index and Git plumbing. The base repo worktree and
 base repo index are not touched. The wafer branch is advanced atomically; if
-the branch moved outside `wafers`, the command refuses to overwrite it.
+the branch moved outside `wafers`, the command refuses to overwrite it. Path
+arguments are relative to the wafer root; absolute paths and parent traversal
+are refused.
 
 ### `wafers git-diff`
 

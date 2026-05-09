@@ -39,26 +39,33 @@ container or sandbox outside wafers.
    wafers git-commit <name> -m "<message>"
    ` + "```" + `
 
-7. Check wafer status and commit pointers:
+7. If the wafer contains scratch files that should not be committed, commit only
+   selected paths:
+
+   ` + "```sh" + `
+   wafers git-commit <name> -m "<message>" -- <paths>
+   ` + "```" + `
+
+8. Check wafer status and commit pointers:
 
    ` + "```sh" + `
    wafers ls
    ` + "```" + `
 
-8. Inspect committed wafer changes:
+9. Inspect committed wafer changes:
 
    ` + "```sh" + `
    wafers git-diff <name>
    ` + "```" + `
 
-9. Push the branch from the base repo:
+10. Push the branch from the base repo:
 
    ` + "```sh" + `
    git -C <base-repo> log --oneline --decorate --graph --all
    git -C <base-repo> push origin <branch>
    ` + "```" + `
 
-10. Clean up the wafer when finished:
+11. Clean up the wafer when finished:
 
    ` + "```sh" + `
    cd /tmp
@@ -72,6 +79,7 @@ container or sandbox outside wafers.
 - Never use the base repo index as part of the task.
 - Use unique branch names; wafers add refuses an existing branch.
 - Mount wafers outside other Git repos so Git cannot discover a parent .git.
+- Use ` + "`wafers git-commit <name> -m \"...\" -- <paths>`" + ` when scratch files should remain uncommitted.
 - If ` + "`wafers rm`" + ` says the device is busy, leave the mountpoint with ` + "`cd /tmp`" + ` and retry.
 - ` + "`wafers rm`" + ` removes wafer state, but keeps the local branch and commits.
 

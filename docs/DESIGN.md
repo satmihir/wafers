@@ -134,8 +134,9 @@ explicitly against the base repo if it knows the path.
 
 ## `wafers git-commit`
 
-`wafers git-commit` commits the whole mounted wafer view and advances the wafer
-branch.
+`wafers git-commit` commits the mounted wafer view and advances the wafer
+branch. By default it commits the whole view. When paths are supplied after
+`--`, it updates the private index only for those paths.
 
 ![wafers git-commit flow](assets/git-commit-flow.svg)
 
@@ -146,6 +147,7 @@ Important properties:
 - The wafer must be mounted.
 - The current branch tip must equal `meta.last_commit`.
 - The wafer-private index is scratch state and is rebuilt for each commit.
+- Path-limited commits accept paths relative to the wafer root.
 - Empty commits are refused.
 - Branch updates are guarded with the expected old commit.
 
@@ -159,6 +161,12 @@ GIT_INDEX_FILE=<wafer-index> \
 git --git-dir=<base-git-dir> \
     --work-tree=<wafer-mountpoint> \
     add -A -- .
+
+# Or, for path-limited commits:
+GIT_INDEX_FILE=<wafer-index> \
+git --git-dir=<base-git-dir> \
+    --work-tree=<wafer-mountpoint> \
+    add -A -- <paths>...
 
 GIT_INDEX_FILE=<wafer-index> \
 git --git-dir=<base-git-dir> write-tree
@@ -204,8 +212,9 @@ updates, but concurrent operations can still contend on Git lock files.
 
 ## Ignore Rules
 
-`git-commit` runs `git add -A -- .` with the wafer mountpoint as `--work-tree`,
-so normal worktree ignore rules apply:
+`git-commit` runs `git add -A -- .`, or `git add -A -- <paths>...` for
+path-limited commits, with the wafer mountpoint as `--work-tree`, so normal
+worktree ignore rules apply:
 
 - `.gitignore`
 - nested `.gitignore` files
