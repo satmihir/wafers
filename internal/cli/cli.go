@@ -150,7 +150,7 @@ Notes:
 	"git-commit": `wafers git-commit - commit the mounted wafer view
 
 Usage:
-  wafers git-commit <name> -m <message>
+  wafers git-commit <name> -m <message> [-- <paths>...]
 
 Commits the entire mounted wafer view to the wafer branch. This is similar to
 "git add -A && git commit", but wafers uses a private index and Git plumbing so
@@ -160,12 +160,17 @@ Required:
   <name>              Wafer name
   -m, --message       Commit message
 
+Optional:
+  -- <paths>...       Commit only these paths, relative to the wafer root
+
 Example:
   wafers git-commit agent-1 -m "fix parser"
+  wafers git-commit agent-1 -m "fix parser" -- parser.go go.mod
 
 Notes:
   - The wafer must be mounted.
   - Empty commits are refused.
+  - Without paths, the entire wafer view is committed.
   - If the wafer branch moved outside wafers, the commit is refused.
 `,
 	"git-diff": `wafers git-diff - show committed wafer branch changes
@@ -498,7 +503,7 @@ func runGitCommit(ctx context.Context, args []string, stdout io.Writer) error {
 	if err := gitutil.ReadTree(ctx, meta.BaseGitDir, meta.Index, parent); err != nil {
 		return fmt.Errorf("seed wafer index: %w", err)
 	}
-	if err := gitutil.AddAll(ctx, meta.BaseGitDir, meta.Index, meta.Mountpoint); err != nil {
+	if err := addCommitPaths(ctx, parsed, meta); err != nil {
 		return fmt.Errorf("update wafer index: %w", err)
 	}
 	tree, err := gitutil.WriteTree(ctx, meta.BaseGitDir, meta.Index)
@@ -525,6 +530,33 @@ func runGitCommit(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(stdout, "committed wafer %q as %s\n", meta.Name, shortSHA(commit))
+	return nil
+}
+
+func addCommitPaths(ctx context.Context, parsed gitCommitArgs, meta *state.Meta) error {
+	if len(parsed.Paths) == 0 {
+		return gitutil.AddAll(ctx, meta.BaseGitDir, meta.Index, meta.Mountpoint)
+	}
+	for _, path := range parsed.Paths {
+		if err := validateCommitPath(path); err != nil {
+			return err
+		}
+	}
+	return gitutil.AddPaths(ctx, meta.BaseGitDir, meta.Index, meta.Mountpoint, parsed.Paths)
+}
+
+func validateCommitPath(path string) error {
+	if path == "" {
+		return errors.New("path must not be empty")
+	}
+	if filepath.IsAbs(path) {
+		return fmt.Errorf("path %q must be relative to the wafer root", path)
+	}
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if part == ".." {
+			return fmt.Errorf("path %q must not contain parent traversal", path)
+		}
+	}
 	return nil
 }
 
@@ -723,15 +755,23 @@ type listArgs struct {
 type gitCommitArgs struct {
 	Name    string
 	Message string
+	Paths   []string
 }
 
 func parseGitCommitArgs(args []string) (gitCommitArgs, error) {
 	var parsed gitCommitArgs
 	var positional []string
 	messageSet := false
+	pathsMode := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
+		if pathsMode {
+			parsed.Paths = append(parsed.Paths, arg)
+			continue
+		}
 		switch {
+		case arg == "--":
+			pathsMode = true
 		case arg == "-m" || arg == "--message":
 			if messageSet {
 				return gitCommitArgs{}, errors.New("git-commit accepts exactly one -m/--message value")
@@ -761,7 +801,10 @@ func parseGitCommitArgs(args []string) (gitCommitArgs, error) {
 		}
 	}
 	if len(positional) != 1 || !messageSet {
-		return gitCommitArgs{}, errors.New("usage: wafers git-commit <name> -m <message>")
+		return gitCommitArgs{}, errors.New("usage: wafers git-commit <name> -m <message> [-- <paths>...]")
+	}
+	if pathsMode && len(parsed.Paths) == 0 {
+		return gitCommitArgs{}, errors.New("git-commit requires at least one path after --")
 	}
 	parsed.Name = positional[0]
 	return parsed, nil

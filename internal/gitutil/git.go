@@ -76,6 +76,12 @@ func AddAll(ctx context.Context, gitDir, indexPath, workTree string) error {
 	return err
 }
 
+func AddPaths(ctx context.Context, gitDir, indexPath, workTree string, paths []string) error {
+	args := append([]string{"--work-tree", workTree, "add", "-A", "--"}, paths...)
+	_, err := gitWithIndex(ctx, workTree, gitDir, indexPath, args...)
+	return err
+}
+
 func WriteTree(ctx context.Context, gitDir, indexPath string) (string, error) {
 	return gitWithIndex(ctx, "", gitDir, indexPath, "write-tree")
 }

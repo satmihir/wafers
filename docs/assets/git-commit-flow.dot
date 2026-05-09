@@ -22,7 +22,7 @@ digraph wafers_git_commit_flow {
     color="#555555"
   ];
 
-  start [shape=oval, label="wafers git-commit <name>\n-m <message>", fillcolor="#ecf7ff"];
+  start [shape=oval, label="wafers git-commit <name>\n-m <message>\n[-- <paths>...]", fillcolor="#ecf7ff"];
   load [label="load wafer metadata"];
   mounted [shape=diamond, label="mountpoint mounted?"];
   fail_mount [label="fail:\nwafer is not mounted", fillcolor="#ffecec"];
@@ -30,7 +30,7 @@ digraph wafers_git_commit_flow {
   moved [shape=diamond, label="tip == last_commit?"];
   fail_moved [label="fail:\nbranch moved outside wafers", fillcolor="#ffecec"];
   reset_index [label="remove private index\nread-tree branch tip"];
-  add_all [label="git add -A -- .\nwith GIT_INDEX_FILE\nand --work-tree=mountpoint"];
+  add_all [label="git add -A -- .\nor selected paths\nwith private index"];
   write_tree [label="write-tree"];
   empty [shape=diamond, label="tree == parent tree?"];
   fail_empty [label="fail:\nnothing to commit", fillcolor="#ffecec"];

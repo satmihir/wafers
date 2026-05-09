@@ -96,6 +96,14 @@ func TestParseGitCommitArgs(t *testing.T) {
 	if got.Name != "demo" || got.Message != "other" {
 		t.Fatalf("unexpected args: %#v", got)
 	}
+
+	got, err = parseGitCommitArgs([]string{"demo", "-m", "message", "--", "pkg/value.txt", "-dash.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "demo" || got.Message != "message" || len(got.Paths) != 2 || got.Paths[0] != "pkg/value.txt" || got.Paths[1] != "-dash.txt" {
+		t.Fatalf("unexpected path args: %#v", got)
+	}
 }
 
 func TestParseGitCommitArgsRejectsInvalidForms(t *testing.T) {
@@ -103,12 +111,28 @@ func TestParseGitCommitArgsRejectsInvalidForms(t *testing.T) {
 		{"demo"},
 		{"-m", "message"},
 		{"demo", "-m"},
+		{"demo", "-m", "message", "--"},
 		{"demo", "-m", "one", "--message", "two"},
 		{"demo", "--author", "me", "-m", "message"},
 	}
 	for _, args := range tests {
 		if _, err := parseGitCommitArgs(args); err == nil {
 			t.Fatalf("parseGitCommitArgs(%v) returned nil", args)
+		}
+	}
+}
+
+func TestValidateCommitPath(t *testing.T) {
+	valid := []string{".", "README.md", "pkg/value.txt", "-dash.txt"}
+	for _, path := range valid {
+		if err := validateCommitPath(path); err != nil {
+			t.Fatalf("validateCommitPath(%q) returned error: %v", path, err)
+		}
+	}
+	invalid := []string{"", "/tmp/value.txt", "../outside.txt", "pkg/../outside.txt"}
+	for _, path := range invalid {
+		if err := validateCommitPath(path); err == nil {
+			t.Fatalf("validateCommitPath(%q) returned nil", path)
 		}
 	}
 }
