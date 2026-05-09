@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -157,6 +159,7 @@ func TestRunCommandHelp(t *testing.T) {
 		{[]string{"help", "add"}, "wafers add - create a wafer"},
 		{[]string{"add", "--help"}, "Usage:\n  wafers add <name>"},
 		{[]string{"git-commit", "-h"}, "wafers git-commit - commit"},
+		{[]string{"git-diff", "-h"}, "wafers git-diff - show"},
 		{[]string{"rm", "help"}, "wafers rm - unmount"},
 		{[]string{"doctor", "--help"}, "Install hints:"},
 		{[]string{"skill", "--help"}, "wafers skill > SKILL.md"},
@@ -177,6 +180,21 @@ func TestRunCommandHelp(t *testing.T) {
 	}
 	if err := Run(context.Background(), []string{"help", "add", "extra"}, &stdout, &stderr); err == nil || !strings.Contains(err.Error(), "usage: wafers help") {
 		t.Fatalf("extra help err = %v", err)
+	}
+}
+
+func TestParseNameOnlyArgs(t *testing.T) {
+	got, err := parseNameOnlyArgs("git-diff", []string{"foo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "foo" {
+		t.Fatalf("name = %q", got)
+	}
+	for _, args := range [][]string{{}, {"foo", "bar"}} {
+		if _, err := parseNameOnlyArgs("git-diff", args); err == nil {
+			t.Fatalf("parseNameOnlyArgs(%v) returned nil", args)
+		}
 	}
 }
 
@@ -278,6 +296,53 @@ func TestRunListJSON(t *testing.T) {
 	}
 }
 
+func TestRunGitDiffShowsCommittedBranchChanges(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	repo := filepath.Join(root, "repo")
+	runTestGit(t, repo, "init")
+	runTestGit(t, repo, "config", "user.name", "wafers")
+	runTestGit(t, repo, "config", "user.email", "wafers@example.invalid")
+	writeTestFile(t, filepath.Join(repo, "README.md"), "base\n")
+	runTestGit(t, repo, "add", ".")
+	runTestGit(t, repo, "commit", "-m", "initial")
+	base := testGitOutput(t, repo, "rev-parse", "HEAD")
+	runTestGit(t, repo, "checkout", "-b", "agent/foo")
+	writeTestFile(t, filepath.Join(repo, "README.md"), "changed\n")
+	writeTestFile(t, filepath.Join(repo, "new.txt"), "new\n")
+	runTestGit(t, repo, "add", ".")
+	runTestGit(t, repo, "commit", "-m", "branch changes")
+	runTestGit(t, repo, "checkout", "master")
+
+	store, err := state.OpenDefault()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(&state.Meta{
+		Version:    1,
+		Name:       "foo",
+		BaseRepo:   repo,
+		BaseGitDir: filepath.Join(repo, ".git"),
+		BaseCommit: base,
+		Branch:     "agent/foo",
+		LastCommit: testGitOutput(t, repo, "rev-parse", "agent/foo"),
+		Mountpoint: filepath.Join(root, "missing-mount"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), []string{"git-diff", "foo"}, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	out := stdout.String()
+	for _, want := range []string{"diff --git a/README.md b/README.md", "+changed", "diff --git a/new.txt b/new.txt", "+new"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("git-diff output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestRunSkill(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if err := Run(context.Background(), []string{"skill"}, &stdout, &stderr); err != nil {
@@ -301,5 +366,38 @@ func TestRunSkill(t *testing.T) {
 	stdout.Reset()
 	if err := Run(context.Background(), []string{"skill", "extra"}, &stdout, &stderr); err == nil {
 		t.Fatal("skill with extra args returned nil")
+	}
+}
+
+func runTestGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	if args[0] == "init" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+	}
+}
+
+func testGitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

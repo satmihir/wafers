@@ -143,6 +143,7 @@ commits.
 ```text
 wafers add <name> --at <mountpoint> --branch <branch> [--from <repo>]
 wafers git-commit <name> -m <message>
+wafers git-diff <name>
 wafers ls
 wafers rm <name> [--force]
 wafers doctor
@@ -187,6 +188,18 @@ git commit
 but it uses a wafer-private index and Git plumbing. The base repo worktree and
 base repo index are not touched. The wafer branch is advanced atomically; if
 the branch moved outside `wafers`, the command refuses to overwrite it.
+
+### `wafers git-diff`
+
+Shows committed wafer branch changes.
+
+```sh
+wafers git-diff agent-1
+```
+
+This is equivalent to diffing the wafer branch against the base commit recorded
+when the wafer was created. The wafer does not need to be mounted. Uncommitted
+edits in the wafer mount are not included.
 
 ### `wafers rm`
 
