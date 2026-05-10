@@ -155,6 +155,39 @@ func TestWorktreeClean(t *testing.T) {
 	}
 }
 
+func TestIsAncestor(t *testing.T) {
+	ctx := context.Background()
+	repo := newGitRepo(t)
+	gitDir := filepath.Join(repo, ".git")
+	base := gitOutCmd(t, repo, "rev-parse", "HEAD")
+	descendant := commitFile(t, repo, "descendant.txt", "descendant\n", "descendant")
+	runGitCmd(t, repo, "checkout", "-b", "sibling", base)
+	sibling := commitFile(t, repo, "sibling.txt", "sibling\n", "sibling")
+	runGitCmd(t, repo, "checkout", "master")
+
+	tests := []struct {
+		name string
+		base string
+		tip  string
+		want bool
+	}{
+		{"same commit", base, base, true},
+		{"descendant", base, descendant, true},
+		{"sibling", descendant, sibling, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := IsAncestor(ctx, gitDir, tt.base, tt.tip)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("IsAncestor() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLocalBranchHelpers(t *testing.T) {
 	ctx := context.Background()
 	repo := newGitRepo(t)
@@ -269,6 +302,24 @@ func TestDiff(t *testing.T) {
 		if !strings.Contains(diff, want) {
 			t.Fatalf("diff missing %q:\n%s", want, diff)
 		}
+	}
+}
+
+func TestTreeForWorktree(t *testing.T) {
+	ctx := context.Background()
+	repo := newGitRepo(t)
+	gitDir := filepath.Join(repo, ".git")
+	commit := commitFile(t, repo, "tree.txt", "tree\n", "tree")
+	got, err := TreeForWorktree(ctx, gitDir, filepath.Join(t.TempDir(), "index"), repo, commit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := TreeForCommit(ctx, gitDir, commit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("tree = %s, want %s", got, want)
 	}
 }
 

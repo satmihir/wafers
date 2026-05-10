@@ -46,8 +46,8 @@ func TestIntegrationAddCreatesBranchAndHidesGit(t *testing.T) {
 	}
 
 	err := Run(env.ctx, []string{"add", "bar", "--from", env.repo, "--at", filepath.Join(env.root, "mnt2"), "--branch", "agent/foo"}, &env.stdout, &env.stderr)
-	if err == nil || !strings.Contains(err.Error(), "already exists") {
-		t.Fatalf("duplicate branch add err = %v, want already exists", err)
+	if err == nil || !strings.Contains(err.Error(), "already owned") {
+		t.Fatalf("duplicate branch add err = %v, want already owned", err)
 	}
 }
 
@@ -137,6 +137,72 @@ func TestIntegrationAddAllowsIgnoredBaseFiles(t *testing.T) {
 	meta := env.addWafer(t, "foo", "agent/foo")
 	if meta.LastCommit != meta.BaseCommit {
 		t.Fatalf("last_commit after add = %s, want base %s", meta.LastCommit, meta.BaseCommit)
+	}
+}
+
+func TestIntegrationAddExistingBranchReplaysBranchTreeAndContinues(t *testing.T) {
+	env := newIntegrationEnv(t)
+	base := gitOutput(t, env.repo, "rev-parse", "HEAD")
+	runGit(t, env.repo, "checkout", "-b", "agent/foo")
+	writeFile(t, filepath.Join(env.repo, "pkg", "value.txt"), "branch value\n")
+	writeFile(t, filepath.Join(env.repo, "branch-only.txt"), "branch only\n")
+	if err := os.Remove(filepath.Join(env.repo, "README.md")); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, env.repo, "add", "-A", ".")
+	runGit(t, env.repo, "commit", "-m", "branch changes")
+	branchTip := gitOutput(t, env.repo, "rev-parse", "HEAD")
+	runGit(t, env.repo, "checkout", "master")
+
+	meta := env.addWafer(t, "foo", "agent/foo")
+	if meta.BaseCommit != base || meta.LastCommit != branchTip {
+		t.Fatalf("meta commits = base %s last %s, want %s %s", meta.BaseCommit, meta.LastCommit, base, branchTip)
+	}
+	if got := readFile(t, filepath.Join(env.mountpoint, "pkg", "value.txt")); string(got) != "branch value\n" {
+		t.Fatalf("mounted pkg/value.txt = %q", got)
+	}
+	if got := readFile(t, filepath.Join(env.mountpoint, "branch-only.txt")); string(got) != "branch only\n" {
+		t.Fatalf("mounted branch-only.txt = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(env.mountpoint, "README.md")); !os.IsNotExist(err) {
+		t.Fatalf("README.md should be hidden in mount, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(env.repo, "branch-only.txt")); !os.IsNotExist(err) {
+		t.Fatalf("branch-only.txt should not appear in base checkout, stat err = %v", err)
+	}
+
+	writeFile(t, filepath.Join(env.mountpoint, "continued.txt"), "continued\n")
+	meta = env.gitCommit(t, "foo", "continue branch")
+	if parent := gitOutput(t, env.repo, "rev-parse", meta.LastCommit+"^"); parent != branchTip {
+		t.Fatalf("reattached commit parent = %s, want %s", parent, branchTip)
+	}
+}
+
+func TestIntegrationAddRejectsNonDescendantExistingBranch(t *testing.T) {
+	env := newIntegrationEnv(t)
+	base := gitOutput(t, env.repo, "rev-parse", "HEAD")
+	runGit(t, env.repo, "checkout", "-b", "agent/foo", base)
+	writeFile(t, filepath.Join(env.repo, "branch.txt"), "branch\n")
+	runGit(t, env.repo, "add", ".")
+	runGit(t, env.repo, "commit", "-m", "branch")
+	branchTip := gitOutput(t, env.repo, "rev-parse", "HEAD")
+	runGit(t, env.repo, "checkout", "master")
+	writeFile(t, filepath.Join(env.repo, "base2.txt"), "base2\n")
+	runGit(t, env.repo, "add", ".")
+	runGit(t, env.repo, "commit", "-m", "advance base")
+
+	err := Run(env.ctx, []string{"add", "foo", "--from", env.repo, "--at", env.mountpoint, "--branch", "agent/foo"}, &env.stdout, &env.stderr)
+	if err == nil || !strings.Contains(err.Error(), "does not descend") {
+		t.Fatalf("non-descendant add err = %v, want does not descend", err)
+	}
+	if _, err := env.store.Load("foo"); !os.IsNotExist(err) {
+		t.Fatalf("wafer metadata should not exist, err = %v", err)
+	}
+	if mountpointExists, err := pathExists(env.mountpoint); err != nil || mountpointExists {
+		t.Fatalf("mountpoint should not be created, exists=%v err=%v", mountpointExists, err)
+	}
+	if got := gitOutput(t, env.repo, "rev-parse", "refs/heads/agent/foo"); got != branchTip {
+		t.Fatalf("branch tip changed = %s, want %s", got, branchTip)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/satmihir/wafers/internal/gitutil"
 	"github.com/satmihir/wafers/internal/state"
 )
 
@@ -367,6 +368,137 @@ func TestRunGitDiffShowsCommittedBranchChanges(t *testing.T) {
 	}
 }
 
+func TestPlanAddBranch(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	runTestGit(t, repo, "init")
+	runTestGit(t, repo, "config", "user.name", "wafers")
+	runTestGit(t, repo, "config", "user.email", "wafers@example.invalid")
+	writeTestFile(t, filepath.Join(repo, "README.md"), "base\n")
+	runTestGit(t, repo, "add", ".")
+	runTestGit(t, repo, "commit", "-m", "initial")
+	resolved, err := gitutil.ResolveRepo(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &state.Store{Root: filepath.Join(root, "state")}
+
+	newPlan, err := planAddBranch(ctx, store, resolved, "agent/new")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !newPlan.CreateBranch || newPlan.Replay || newPlan.BaseCommit != resolved.Head || newPlan.LastCommit != resolved.Head {
+		t.Fatalf("new branch plan = %#v", newPlan)
+	}
+
+	runTestGit(t, repo, "branch", "agent/at-head", resolved.Head)
+	atHeadPlan, err := planAddBranch(ctx, store, resolved, "agent/at-head")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if atHeadPlan.CreateBranch || atHeadPlan.Replay || atHeadPlan.LastCommit != resolved.Head {
+		t.Fatalf("at-head branch plan = %#v", atHeadPlan)
+	}
+
+	runTestGit(t, repo, "checkout", "-b", "agent/descendant")
+	writeTestFile(t, filepath.Join(repo, "descendant.txt"), "descendant\n")
+	runTestGit(t, repo, "add", ".")
+	runTestGit(t, repo, "commit", "-m", "descendant")
+	descendantTip := testGitOutput(t, repo, "rev-parse", "HEAD")
+	runTestGit(t, repo, "checkout", "master")
+	descendantPlan, err := planAddBranch(ctx, store, resolved, "agent/descendant")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descendantPlan.CreateBranch || !descendantPlan.Replay || descendantPlan.LastCommit != descendantTip {
+		t.Fatalf("descendant branch plan = %#v, tip %s", descendantPlan, descendantTip)
+	}
+
+	runTestGit(t, repo, "checkout", "-b", "agent/sibling", resolved.Head)
+	writeTestFile(t, filepath.Join(repo, "sibling.txt"), "sibling\n")
+	runTestGit(t, repo, "add", ".")
+	runTestGit(t, repo, "commit", "-m", "sibling")
+	runTestGit(t, repo, "checkout", "master")
+	writeTestFile(t, filepath.Join(repo, "base2.txt"), "base2\n")
+	runTestGit(t, repo, "add", ".")
+	runTestGit(t, repo, "commit", "-m", "advance base")
+	advancedRepo, err := gitutil.ResolveRepo(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := planAddBranch(ctx, store, advancedRepo, "agent/sibling"); err == nil || !strings.Contains(err.Error(), "does not descend") {
+		t.Fatalf("non-descendant branch err = %v, want does not descend", err)
+	}
+
+	if err := store.Save(&state.Meta{Name: "owned", Branch: "agent/owned"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := planAddBranch(ctx, store, resolved, "agent/owned"); err == nil || !strings.Contains(err.Error(), "already owned") {
+		t.Fatalf("owned branch err = %v, want already owned", err)
+	}
+}
+
+func TestReplayExistingBranchUpdatesMountedTree(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	repoRoot := filepath.Join(root, "repo")
+	runTestGit(t, repoRoot, "init")
+	runTestGit(t, repoRoot, "config", "user.name", "wafers")
+	runTestGit(t, repoRoot, "config", "user.email", "wafers@example.invalid")
+	if err := os.MkdirAll(filepath.Join(repoRoot, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(repoRoot, "README.md"), "base\n")
+	writeTestFile(t, filepath.Join(repoRoot, "pkg", "value.txt"), "base value\n")
+	runTestGit(t, repoRoot, "add", ".")
+	runTestGit(t, repoRoot, "commit", "-m", "initial")
+	baseRepo, err := gitutil.ResolveRepo(ctx, repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runTestGit(t, repoRoot, "checkout", "-b", "agent/existing")
+	writeTestFile(t, filepath.Join(repoRoot, "pkg", "value.txt"), "branch value\n")
+	writeTestFile(t, filepath.Join(repoRoot, "branch-only.txt"), "branch only\n")
+	if err := os.Remove(filepath.Join(repoRoot, "README.md")); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, repoRoot, "add", "-A", ".")
+	runTestGit(t, repoRoot, "commit", "-m", "branch changes")
+	tip := testGitOutput(t, repoRoot, "rev-parse", "HEAD")
+	runTestGit(t, repoRoot, "checkout", "master")
+
+	mountpoint := filepath.Join(root, "mount")
+	if err := os.MkdirAll(filepath.Join(mountpoint, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, filepath.Join(mountpoint, "README.md"), "base\n")
+	writeTestFile(t, filepath.Join(mountpoint, "pkg", "value.txt"), "base value\n")
+
+	meta := &state.Meta{
+		Name:       "existing",
+		BaseGitDir: baseRepo.GitDir,
+		BaseCommit: baseRepo.Head,
+		Branch:     "agent/existing",
+		Mountpoint: mountpoint,
+		Index:      filepath.Join(root, "index"),
+	}
+	plan := addBranchPlan{BaseCommit: baseRepo.Head, LastCommit: tip, Replay: true}
+	if err := replayExistingBranch(ctx, baseRepo, meta, plan); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTestFile(t, filepath.Join(mountpoint, "pkg", "value.txt")); got != "branch value\n" {
+		t.Fatalf("pkg/value.txt = %q", got)
+	}
+	if got := readTestFile(t, filepath.Join(mountpoint, "branch-only.txt")); got != "branch only\n" {
+		t.Fatalf("branch-only.txt = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(mountpoint, "README.md")); !os.IsNotExist(err) {
+		t.Fatalf("README.md should be removed, stat err = %v", err)
+	}
+}
+
 func TestRunSkill(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if err := Run(context.Background(), []string{"skill"}, &stdout, &stderr); err != nil {
@@ -424,4 +556,13 @@ func writeTestFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func readTestFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }

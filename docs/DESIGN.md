@@ -9,8 +9,8 @@ mixed together in normal local development:
 - the Git branch that receives the agent's result
 
 The current implementation is intentionally narrow: Linux, `fuse-overlayfs`,
-whole-wafer commits, and local branch refs. This document describes that design,
-the invariants it depends on, and the likely extension points.
+wafer commits, and local branch refs. This document describes that design, the
+invariants it depends on, and the likely extension points.
 
 ## Goals
 
@@ -91,7 +91,8 @@ outside wafers, `git-commit` refuses to overwrite it.
 
 ## `wafers add`
 
-`wafers add` creates the filesystem view and the local branch.
+`wafers add` creates the filesystem view and creates or attaches the local
+branch.
 
 ![wafers add flow](assets/add-flow.svg)
 
@@ -102,18 +103,24 @@ High-level flow:
 1. Validate wafer name, branch name, and repo.
 2. Refuse to continue if the base repo worktree is not clean, except for
    ignored files.
-3. Refuse to continue if the requested local branch already exists.
-4. Resolve the mountpoint and ensure it is empty.
-5. Record the base repo root, Git dir, and current `HEAD`.
-6. Create wafer state directories.
-7. Mount `fuse-overlayfs` with:
+3. Refuse to continue if another wafer already owns the requested branch.
+4. If the requested branch does not exist, plan to create it at the current
+   base `HEAD`.
+5. If the requested branch exists, require the current base `HEAD` to be an
+   ancestor of the branch tip.
+6. Resolve the mountpoint and ensure it is empty.
+7. Record the base repo root, Git dir, current `HEAD`, and expected branch tip.
+8. Create wafer state directories.
+9. Mount `fuse-overlayfs` with:
    - `lowerdir = base repo`
    - `upperdir = wafer upperdir`
    - `workdir = wafer workdir`
-8. Remove `.git` from the mounted view, creating wafer-local whiteout state.
-9. Verify Git is not discoverable from the wafer mountpoint.
-10. Create `refs/heads/<branch>` at the base commit.
-11. Save metadata with `last_commit = base_commit`.
+10. Remove `.git` from the mounted view, creating wafer-local whiteout state.
+11. Verify Git is not discoverable from the wafer mountpoint.
+12. For an existing branch ahead of the base, replay `base..branch` into the
+    mounted view and verify the mounted tree matches the branch tree.
+13. For a new branch, create `refs/heads/<branch>` at the base commit.
+14. Save metadata with `last_commit` set to the expected branch tip.
 
 If setup fails after partial state is created, `add` attempts to unmount, remove
 wafer state, and delete the branch if wafers created it.
@@ -182,8 +189,11 @@ respect to external branch changes.
 
 ## Branch Ownership
 
-`wafers add` creates the branch and refuses an existing branch. That gives each
-wafer clear ownership of its branch from creation onward.
+`wafers add` gives each wafer clear ownership of one local branch. A new branch
+is created at the base commit. An existing branch may be attached only when it
+descends from the current base `HEAD` and no other wafer already owns it. If the
+existing branch is ahead, `add` replays the branch delta into the mounted view
+before saving metadata.
 
 `wafers git-commit` reads the branch before creating the new commit. If the
 branch tip is different from `meta.last_commit`, wafers assumes another process
@@ -250,7 +260,11 @@ Common failures and expected handling:
   a parent `.git`.
 - Dirty base repo: `add` fails because the live lowerdir must match the
   recorded base commit.
-- Branch already exists: `add` fails to avoid ambiguous branch ownership.
+- Branch already owned: `add` fails to avoid ambiguous branch ownership.
+- Existing branch does not descend from base `HEAD`: `add` fails because a
+  patch replay would not represent the branch history cleanly.
+- Existing branch replay mismatch: `add` fails if the mounted tree cannot be
+  made to match the branch tree.
 - Branch moved outside wafers: `git-commit` fails to avoid clobbering work.
 - Nothing changed: `git-commit` fails with `nothing to commit`.
 - Busy mount: `rm` fails if a process has its cwd or open files under the
