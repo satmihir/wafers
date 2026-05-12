@@ -45,9 +45,10 @@ This is early, Linux-only, and intentionally narrow. It can:
 
 - check host support for `fuse-overlayfs`
 - create named wafer views at chosen mountpoints
-- create one local branch per wafer
+- create or attach one local branch per wafer
 - hide `.git` inside wafer views so agents do not run Git there by accident
-- commit the full wafer view onto the wafer branch
+- commit the wafer view onto the wafer branch
+- commit only selected paths when scratch files should remain uncommitted
 - list and remove wafers
 
 Not implemented yet:
@@ -105,7 +106,8 @@ wafers add agent-1 --at /tmp/agent-1 --branch agents/agent-1
 ```
 
 This records the current `HEAD`, creates local branch `agents/agent-1` at that
-commit, mounts the wafer at `/tmp/agent-1`, and hides `.git` in the wafer view.
+commit if needed, mounts the wafer at `/tmp/agent-1`, and hides `.git` in the
+wafer view.
 
 Work inside the wafer:
 
@@ -156,7 +158,7 @@ Run `wafers help <command>` for command-specific examples and notes.
 
 ### `wafers add`
 
-Creates a wafer and a local branch.
+Creates a wafer for a local branch.
 
 ```sh
 wafers add agent-1 --from /src/repo --at /tmp/agent-1 --branch agents/agent-1
@@ -166,7 +168,11 @@ Rules:
 
 - `--from` defaults to the current directory.
 - the base repo worktree must be clean, except for ignored files.
-- `--branch` must be a valid branch name and must not already exist.
+- `--branch` must be a valid branch name.
+- if the branch does not exist, wafers creates it at the current base `HEAD`.
+- if the branch already exists, it must descend from the current base `HEAD`,
+  and wafers replays its changes into the mounted wafer view.
+- a branch can be owned by only one wafer at a time.
 - the mountpoint is created if missing, but must be empty.
 - `.git` is hidden in the wafer view with overlay whiteout state.
 

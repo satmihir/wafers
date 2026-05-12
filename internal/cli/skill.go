@@ -77,7 +77,8 @@ container or sandbox outside wafers.
 - Never edit the base repo worktree for wafer task changes.
 - Before creating a wafer, keep the base repo clean except for ignored files.
 - Never use the base repo index as part of the task.
-- Use unique branch names; wafers add refuses an existing branch.
+- Use one wafer per branch. wafers can attach to an existing branch only when it
+  descends from the current base HEAD and is not already owned by another wafer.
 - Mount wafers outside other Git repos so Git cannot discover a parent .git.
 - Use ` + "`wafers git-commit <name> -m \"...\" -- <paths>`" + ` when scratch files should remain uncommitted.
 - If ` + "`wafers rm`" + ` says the device is busy, leave the mountpoint with ` + "`cd /tmp`" + ` and retry.

@@ -24,7 +24,7 @@ Usage:
   wafers <command> [args]
 
 Commands:
-  add         Create a wafer and local branch
+  add         Create a wafer for a local branch
   git-commit  Commit the mounted wafer view onto its branch
   git-diff    Show committed wafer branch changes
   ls          List known wafers
@@ -120,19 +120,21 @@ func printCommandHelp(command string, stdout io.Writer) error {
 }
 
 var commandHelp = map[string]string{
-	"add": `wafers add - create a wafer and local branch
+	"add": `wafers add - create a wafer for a local branch
 
 Usage:
   wafers add <name> --at <mountpoint> --branch <branch> [--from <repo>] [--json]
 
 Creates a fuse-overlayfs-backed repo view at <mountpoint>. The base repo is
-used as the read-only lowerdir. wafers creates the requested local branch at
-the base HEAD and records wafer metadata in the wafers state directory.
+used as the read-only lowerdir. If the requested local branch does not exist,
+wafers creates it at the base HEAD. If it already exists, it must descend from
+the current base HEAD and not be owned by another wafer; wafers replays the
+branch changes into the mounted view.
 
 Required:
   <name>              Wafer name; use letters, numbers, dot, dash, underscore
   --at <mountpoint>   Empty directory where the wafer will be mounted
-  --branch <branch>   New local branch to create for this wafer
+  --branch <branch>   Local branch to create or attach to this wafer
 
 Optional:
   --from <repo>       Base repo path; defaults to the current directory
@@ -143,7 +145,8 @@ Example:
 
 Notes:
   - The base repo worktree must be clean, except for ignored files.
-  - The branch must not already exist.
+  - An existing branch must descend from the current base HEAD.
+  - A branch can be owned by only one wafer at a time.
   - The mountpoint must be outside other Git repos.
   - .git is hidden inside the wafer view on purpose.
 `,
@@ -305,8 +308,9 @@ func runAdd(ctx context.Context, args []string, stdout io.Writer) error {
 	if !clean {
 		return dirtyBaseWorktreeError(status)
 	}
-	if gitutil.LocalBranchExists(ctx, repo.GitDir, parsed.Branch) {
-		return fmt.Errorf("branch %q already exists", parsed.Branch)
+	branchPlan, err := planAddBranch(ctx, store, repo, parsed.Branch)
+	if err != nil {
+		return err
 	}
 	mountpoint, err := filepath.Abs(parsed.At)
 	if err != nil {
@@ -322,13 +326,13 @@ func runAdd(ctx context.Context, args []string, stdout io.Writer) error {
 		Name:       name,
 		BaseRepo:   repo.Root,
 		BaseGitDir: repo.GitDir,
-		BaseCommit: repo.Head,
+		BaseCommit: branchPlan.BaseCommit,
 		Branch:     parsed.Branch,
 		Mountpoint: mountpoint,
 		Upperdir:   filepath.Join(waferDir, "upper"),
 		Workdir:    filepath.Join(waferDir, "work"),
 		Index:      filepath.Join(waferDir, "index"),
-		LastCommit: repo.Head,
+		LastCommit: branchPlan.LastCommit,
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
@@ -356,10 +360,22 @@ func runAdd(ctx context.Context, args []string, stdout io.Writer) error {
 	if gitutil.IsInsideWorkTree(ctx, mountpoint) {
 		return errors.New("wafer mount still appears to be inside a Git worktree; choose a mountpoint outside any Git repository")
 	}
-	if err := gitutil.CreateLocalBranch(ctx, repo.GitDir, parsed.Branch, repo.Head); err != nil {
-		return fmt.Errorf("create branch %q: %w", parsed.Branch, err)
+	if branchPlan.Replay {
+		if err := replayExistingBranch(ctx, repo, &meta, branchPlan); err != nil {
+			return err
+		}
 	}
-	branchCreated = true
+	if !branchPlan.CreateBranch {
+		if err := ensureBranchTip(ctx, repo.GitDir, parsed.Branch, branchPlan.LastCommit); err != nil {
+			return err
+		}
+	}
+	if branchPlan.CreateBranch {
+		if err := gitutil.CreateLocalBranch(ctx, repo.GitDir, parsed.Branch, repo.Head); err != nil {
+			return fmt.Errorf("create branch %q: %w", parsed.Branch, err)
+		}
+		branchCreated = true
+	}
 	if err := store.Save(&meta); err != nil {
 		return err
 	}
@@ -379,6 +395,103 @@ func runAdd(ctx context.Context, args []string, stdout io.Writer) error {
 		return nil
 	}
 	fmt.Fprintf(stdout, "created wafer %q at %s on branch %s\n", name, mountpoint, parsed.Branch)
+	return nil
+}
+
+type addBranchPlan struct {
+	BaseCommit   string
+	LastCommit   string
+	CreateBranch bool
+	Replay       bool
+}
+
+func planAddBranch(ctx context.Context, store *state.Store, repo gitutil.Repo, branch string) (addBranchPlan, error) {
+	if owner, ok, err := branchOwner(store, branch); err != nil {
+		return addBranchPlan{}, err
+	} else if ok {
+		return addBranchPlan{}, fmt.Errorf("branch %q is already owned by wafer %q", branch, owner)
+	}
+	if !gitutil.LocalBranchExists(ctx, repo.GitDir, branch) {
+		return addBranchPlan{
+			BaseCommit:   repo.Head,
+			LastCommit:   repo.Head,
+			CreateBranch: true,
+		}, nil
+	}
+	tip, err := gitutil.LocalBranchTip(ctx, repo.GitDir, branch)
+	if err != nil {
+		return addBranchPlan{}, fmt.Errorf("read branch %q: %w", branch, err)
+	}
+	ok, err := gitutil.IsAncestor(ctx, repo.GitDir, repo.Head, tip)
+	if err != nil {
+		return addBranchPlan{}, fmt.Errorf("check branch ancestry %q: %w", branch, err)
+	}
+	if !ok {
+		return addBranchPlan{}, fmt.Errorf("branch %q does not descend from current base HEAD %s", branch, shortSHA(repo.Head))
+	}
+	return addBranchPlan{
+		BaseCommit: repo.Head,
+		LastCommit: tip,
+		Replay:     tip != repo.Head,
+	}, nil
+}
+
+func branchOwner(store *state.Store, branch string) (string, bool, error) {
+	metas, _, err := store.List()
+	if err != nil {
+		return "", false, err
+	}
+	for _, meta := range metas {
+		if meta.Branch == branch {
+			return meta.Name, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func replayExistingBranch(ctx context.Context, repo gitutil.Repo, meta *state.Meta, branchPlan addBranchPlan) error {
+	if err := ensureBranchTip(ctx, repo.GitDir, meta.Branch, branchPlan.LastCommit); err != nil {
+		return err
+	}
+	patch, err := gitutil.DiffBinary(ctx, repo.Root, branchPlan.BaseCommit, branchPlan.LastCommit)
+	if err != nil {
+		return fmt.Errorf("diff branch %q: %w", meta.Branch, err)
+	}
+	if err := gitutil.ApplyPatch(ctx, meta.Mountpoint, patch); err != nil {
+		return fmt.Errorf("replay branch %q: %w", meta.Branch, err)
+	}
+	if err := ensureBranchTip(ctx, repo.GitDir, meta.Branch, branchPlan.LastCommit); err != nil {
+		return err
+	}
+	if err := verifyMountedTree(ctx, meta, branchPlan.LastCommit); err != nil {
+		return err
+	}
+	return nil
+}
+
+func verifyMountedTree(ctx context.Context, meta *state.Meta, commit string) error {
+	got, err := gitutil.TreeForWorktree(ctx, meta.BaseGitDir, meta.Index, meta.Mountpoint, meta.BaseCommit)
+	if err != nil {
+		return fmt.Errorf("verify mounted tree: %w", err)
+	}
+	want, err := gitutil.TreeForCommit(ctx, meta.BaseGitDir, commit)
+	if err != nil {
+		return fmt.Errorf("read branch tree: %w", err)
+	}
+	if got != want {
+		return fmt.Errorf("mounted tree does not match branch %q", meta.Branch)
+	}
+	return nil
+}
+
+func ensureBranchTip(ctx context.Context, gitDir, branch, expected string) error {
+	tip, err := gitutil.LocalBranchTip(ctx, gitDir, branch)
+	if err != nil {
+		return fmt.Errorf("read branch %q: %w", branch, err)
+	}
+	if tip != expected {
+		return fmt.Errorf("branch %q moved during add; expected %s, found %s", branch, shortSHA(expected), shortSHA(tip))
+	}
 	return nil
 }
 

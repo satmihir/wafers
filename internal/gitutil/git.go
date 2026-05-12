@@ -3,6 +3,7 @@ package gitutil
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -66,6 +67,25 @@ func IsInsideWorkTree(ctx context.Context, dir string) bool {
 	return err == nil && out == "true"
 }
 
+func IsAncestor(ctx context.Context, gitDir, base, tip string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "--git-dir", gitDir, "merge-base", "--is-ancestor", base, tip)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		return true, nil
+	} else {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return false, fmt.Errorf("%s", msg)
+	}
+}
+
 func ReadTree(ctx context.Context, gitDir, indexPath, treeish string) error {
 	_, err := gitWithIndex(ctx, "", gitDir, indexPath, "read-tree", treeish)
 	return err
@@ -84,6 +104,16 @@ func AddPaths(ctx context.Context, gitDir, indexPath, workTree string, paths []s
 
 func WriteTree(ctx context.Context, gitDir, indexPath string) (string, error) {
 	return gitWithIndex(ctx, "", gitDir, indexPath, "write-tree")
+}
+
+func TreeForWorktree(ctx context.Context, gitDir, indexPath, workTree, base string) (string, error) {
+	if err := ReadTree(ctx, gitDir, indexPath, base); err != nil {
+		return "", err
+	}
+	if err := AddAll(ctx, gitDir, indexPath, workTree); err != nil {
+		return "", err
+	}
+	return WriteTree(ctx, gitDir, indexPath)
 }
 
 func TreeForCommit(ctx context.Context, gitDir, commit string) (string, error) {
@@ -139,6 +169,18 @@ func Diff(ctx context.Context, repoRoot, base, branch string) (string, error) {
 	return gitOutputPreserveRaw(ctx, repoRoot, "diff", base+"..."+branch)
 }
 
+func DiffBinary(ctx context.Context, repoRoot, base, tip string) (string, error) {
+	return gitOutputPreserveRaw(ctx, repoRoot, "diff", "--binary", base+".."+tip)
+}
+
+func ApplyPatch(ctx context.Context, workTree, patch string) error {
+	if patch == "" {
+		return nil
+	}
+	_, err := runGitInput(ctx, workTree, nil, patch, "apply", "--binary")
+	return err
+}
+
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
 	return runGit(ctx, dir, nil, args...)
 }
@@ -180,6 +222,26 @@ func runGitCommand(ctx context.Context, dir string, env []string, args ...string
 	if env != nil {
 		cmd.Env = env
 	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return "", fmt.Errorf("%s", msg)
+	}
+	return string(out), nil
+}
+
+func runGitInput(ctx context.Context, dir string, env []string, stdin string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	if env != nil {
+		cmd.Env = env
+	}
+	cmd.Stdin = strings.NewReader(stdin)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
